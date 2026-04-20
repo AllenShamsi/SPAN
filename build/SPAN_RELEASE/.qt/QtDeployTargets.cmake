@@ -1,0 +1,3 @@
+set(__QT_DEPLOY_TARGET_SPAN_FILE C:/Users/alsha/Qt/Projects/SPAN/build/SPAN_RELEASE/SPAN.exe)
+set(__QT_DEPLOY_TARGET_SPAN_TYPE EXECUTABLE)
+set(__QT_DEPLOY_TARGET_SPAN_RUNTIME_DLLS C:/Users/alsha/Qt/6.10.0/mingw_64/bin/Qt6Multimedia.dll;C:/Users/alsha/Qt/6.10.0/mingw_64/bin/Qt6DataVisualization.dll;C:/Users/alsha/Qt/6.10.0/mingw_64/bin/Qt6PrintSupport.dll;C:/Users/alsha/Qt/6.10.0/mingw_64/bin/Qt6OpenGLWidgets.dll;C:/Users/alsha/Qt/6.10.0/mingw_64/bin/Qt6Network.dll;C:/Users/alsha/Qt/6.10.0/mingw_64/bin/Qt6Concurrent.dll;C:/Users/alsha/Qt/6.10.0/mingw_64/bin/Qt6Widgets.dll;C:/Users/alsha/Qt/6.10.0/mingw_64/bin/Qt6OpenGL.dll;C:/Users/alsha/Qt/6.10.0/mingw_64/bin/Qt6Gui.dll;C:/Users/alsha/Qt/6.10.0/mingw_64/bin/Qt6Core.dll)

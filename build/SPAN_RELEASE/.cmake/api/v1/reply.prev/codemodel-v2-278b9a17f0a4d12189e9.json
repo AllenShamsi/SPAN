@@ -1,0 +1,79 @@
+{
+	"configurations" : 
+	[
+		{
+			"directories" : 
+			[
+				{
+					"build" : ".",
+					"hasInstallRule" : true,
+					"jsonFile" : "directory-.-Release-c08f40db61d8a563a57e.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.16"
+					},
+					"projectIndex" : 0,
+					"source" : ".",
+					"targetIndexes" : 
+					[
+						0,
+						1,
+						2
+					]
+				}
+			],
+			"name" : "Release",
+			"projects" : 
+			[
+				{
+					"directoryIndexes" : 
+					[
+						0
+					],
+					"name" : "SPAN",
+					"targetIndexes" : 
+					[
+						0,
+						1,
+						2
+					]
+				}
+			],
+			"targets" : 
+			[
+				{
+					"directoryIndex" : 0,
+					"id" : "SPAN::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-SPAN-Release-6c955a2b34192ac0696b.json",
+					"name" : "SPAN",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "SPAN_autogen::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-SPAN_autogen-Release-1b6b2f8acbfde8062d11.json",
+					"name" : "SPAN_autogen",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "SPAN_autogen_timestamp_deps::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-SPAN_autogen_timestamp_deps-Release-c4a5ead5323bce1cc578.json",
+					"name" : "SPAN_autogen_timestamp_deps",
+					"projectIndex" : 0
+				}
+			]
+		}
+	],
+	"kind" : "codemodel",
+	"paths" : 
+	{
+		"build" : "C:/Users/alsha/Qt/Projects/SPAN/build/SPAN_RELEASE",
+		"source" : "C:/Users/alsha/Qt/Projects/SPAN"
+	},
+	"version" : 
+	{
+		"major" : 2,
+		"minor" : 7
+	}
+}

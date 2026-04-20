@@ -1,0 +1,6 @@
+<RCC>
+    <qresource prefix="/icons">
+        <file>SPAN.jpg</file>
+        <file>SPAN.ico</file>
+    </qresource>
+</RCC>
