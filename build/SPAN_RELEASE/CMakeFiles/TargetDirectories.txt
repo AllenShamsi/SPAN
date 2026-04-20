@@ -1,9 +1,0 @@
-C:/Users/alsha/Qt/Projects/SPAN/build/SPAN_RELEASE/CMakeFiles/SPAN.dir
-C:/Users/alsha/Qt/Projects/SPAN/build/SPAN_RELEASE/CMakeFiles/edit_cache.dir
-C:/Users/alsha/Qt/Projects/SPAN/build/SPAN_RELEASE/CMakeFiles/rebuild_cache.dir
-C:/Users/alsha/Qt/Projects/SPAN/build/SPAN_RELEASE/CMakeFiles/list_install_components.dir
-C:/Users/alsha/Qt/Projects/SPAN/build/SPAN_RELEASE/CMakeFiles/install.dir
-C:/Users/alsha/Qt/Projects/SPAN/build/SPAN_RELEASE/CMakeFiles/install/local.dir
-C:/Users/alsha/Qt/Projects/SPAN/build/SPAN_RELEASE/CMakeFiles/install/strip.dir
-C:/Users/alsha/Qt/Projects/SPAN/build/SPAN_RELEASE/CMakeFiles/SPAN_autogen_timestamp_deps.dir
-C:/Users/alsha/Qt/Projects/SPAN/build/SPAN_RELEASE/CMakeFiles/SPAN_autogen.dir
