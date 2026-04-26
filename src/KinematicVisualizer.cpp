@@ -17,6 +17,7 @@ QCustomPlot* KinematicVisualizer::lastPlotWithLine = nullptr;
 QCPItemRect* KinematicVisualizer::selectionRect = nullptr;
 
 QHash<QCustomPlot*, QCPItemLine*> KinematicVisualizer::vLinesMap;
+QHash<QCustomPlot*, QCPItemRect*> KinematicVisualizer::globalSelectionRects;
 QHash<QCustomPlot*, QCPItemLine*> KinematicVisualizer::globalSelectionLeftLines;
 QHash<QCustomPlot*, QCPItemLine*> KinematicVisualizer::globalSelectionRightLines;
 QHash<QCustomPlot*, QCPItemText*> KinematicVisualizer::globalSelectionLeftLabels;
@@ -35,10 +36,10 @@ inline QColor shadeForAxis(const QColor& base, const QString& axisKey) {
 }
 
 inline QPen makePenFromBase(const QColor& base, const QString& axisKey,
-                            int width = 0, bool cosmetic = true)
+                            double width = 1.0, bool cosmetic = true)
 {
     QPen p(shadeForAxis(base, axisKey));
-    p.setWidth(width);
+    p.setWidthF(width);
     p.setCosmetic(cosmetic);
     return p;
 }
@@ -64,10 +65,16 @@ KinematicVisualizer::KinematicVisualizer(QWidget *parent)
     // Mouse / range signals
     connect(customPlot, &QCustomPlot::mousePress,   this, &KinematicVisualizer::onAnyMousePress);
     connect(customPlot, &QCustomPlot::mouseRelease, this, &KinematicVisualizer::onMouseRelease);
-    connect(customPlot, &QCustomPlot::mouseMove,    this, &KinematicVisualizer::onMouseDrag);
 
     connect(customPlot->xAxis, SIGNAL(rangeChanged(QCPRange)),
             this,              SLOT  (synchronizePlots(QCPRange)));
+
+    connect(customPlot->xAxis,
+            qOverload<const QCPRange &>(&QCPAxis::rangeChanged),
+            this,
+            [this](const QCPRange &range) {
+                rescaleAudioYAxisToVisibleRange(range);
+            });
 
     // Mouse tracking & event filter
     setMouseTracking(true);
@@ -108,11 +115,14 @@ KinematicVisualizer::~KinematicVisualizer() {
 // ---------- Public API ----------
 void KinematicVisualizer::visualizeSignal(const QMap<QString, QVector<double>> &dataMap,
                                           const QString &configName,
-                                          int penWidth,
+                                          double penWidth,
                                           int samplingRate)
 {
     setupCustomPlot();
     customPlot->setFixedHeight(150);
+
+    m_audioSignalFullRes.clear();
+    m_autoScaleAudioY = false;
 
     // Legend
     customPlot->legend->setVisible(true);
@@ -158,7 +168,7 @@ void KinematicVisualizer::visualizeSignal(const QMap<QString, QVector<double>> &
             if (configName.compare("Audio", Qt::CaseInsensitive) == 0) {
                 // Keep audio gray
                 pen = QPen(QColor(140,140,140));
-                pen.setWidth(penWidth);
+                pen.setWidthF(penWidth);
                 pen.setCosmetic(true);
             } else {
                 // Use base color provided by mainWindow (3D palette / derived mixing)
@@ -177,6 +187,14 @@ void KinematicVisualizer::visualizeSignal(const QMap<QString, QVector<double>> &
             // Store original values for cursor readout
             QVector<double> originalYValues = vals;
 
+            if (configName.compare("Audio", Qt::CaseInsensitive) == 0) {
+                m_autoScaleAudioY = true;
+                m_audioSignalFullRes.reserve(x.size());
+                for (int i = 0; i < x.size(); ++i) {
+                    m_audioSignalFullRes.append(qMakePair(x[i], originalYValues[i]));
+                }
+            }
+
             // Center around global center for stacked readability
             const double localMin = *std::min_element(vals.begin(), vals.end());
             const double localMax = *std::max_element(vals.begin(), vals.end());
@@ -187,16 +205,25 @@ void KinematicVisualizer::visualizeSignal(const QMap<QString, QVector<double>> &
             QVector<double> yOffsetValues = vals;
             for (double &yv : yOffsetValues) yv += offset;
 
-            // Downsample (to ~10k points)
-            QVector<double> downX, downY;
-            const int factor = qMax(1, yOffsetValues.size() / 10000);
-            downX.reserve((yOffsetValues.size() + factor - 1) / factor);
-            downY.reserve(downX.capacity());
-            for (int i = 0; i < yOffsetValues.size(); i += factor) {
-                downX.push_back(x[i]);
-                downY.push_back(yOffsetValues[i]);
+            QVector<double> plotX, plotY;
+
+            if (configName.compare("Audio", Qt::CaseInsensitive) == 0) {
+                // Keep full-resolution waveform data for audio
+                plotX = x;
+                plotY = yOffsetValues;
+            } else {
+                // Downsample non-audio traces to keep plotting responsive
+                const int factor = qMax(1, yOffsetValues.size() / 10000);
+                plotX.reserve((yOffsetValues.size() + factor - 1) / factor);
+                plotY.reserve((yOffsetValues.size() + factor - 1) / factor);
+
+                for (int i = 0; i < yOffsetValues.size(); i += factor) {
+                    plotX.push_back(x[i]);
+                    plotY.push_back(yOffsetValues[i]);
+                }
             }
-            graph->setData(downX, downY);
+
+            graph->setData(plotX, plotY);
 
             // Populate for cursor interpolation
             if (key == "X") {
@@ -223,6 +250,10 @@ void KinematicVisualizer::visualizeSignal(const QMap<QString, QVector<double>> &
     if (padding == 0) padding = 1.0;
     customPlot->yAxis->setRange(globalMin - padding, globalMax + padding);
 
+    if (m_autoScaleAudioY) {
+        rescaleAudioYAxisToVisibleRange(customPlot->xAxis->range());
+    }
+
     // If "Audio" plot, show top axis with ticks/labels
     if (configName == "Audio") {
         customPlot->xAxis2->setVisible(true);
@@ -236,6 +267,64 @@ void KinematicVisualizer::visualizeSignal(const QMap<QString, QVector<double>> &
     }
 
     customPlot->update();
+}
+
+void KinematicVisualizer::rescaleAudioYAxisToVisibleRange(const QCPRange &range)
+{
+    if (!m_autoScaleAudioY || m_audioSignalFullRes.isEmpty())
+        return;
+
+    const double left  = range.lower;
+    const double right = range.upper;
+
+    if (!(left < right))
+        return;
+
+    auto beginIt = std::lower_bound(
+        m_audioSignalFullRes.begin(),
+        m_audioSignalFullRes.end(),
+        left,
+        [](const QPair<double,double> &p, double xVal) {
+            return p.first < xVal;
+        });
+
+    auto endIt = std::lower_bound(
+        m_audioSignalFullRes.begin(),
+        m_audioSignalFullRes.end(),
+        right,
+        [](const QPair<double,double> &p, double xVal) {
+            return p.first < xVal;
+        });
+
+    if (beginIt == m_audioSignalFullRes.end() || beginIt == endIt)
+        return;
+
+    double localMin = std::numeric_limits<double>::max();
+    double localMax = std::numeric_limits<double>::lowest();
+
+    for (auto it = beginIt; it != endIt; ++it) {
+        const double y = it->second;
+        if (y < localMin) localMin = y;
+        if (y > localMax) localMax = y;
+    }
+
+    if (localMin == std::numeric_limits<double>::max() ||
+        localMax == std::numeric_limits<double>::lowest())
+        return;
+
+    double padding = (localMax - localMin) * 0.1;
+
+    if (padding == 0.0) {
+        padding = std::max(0.01, std::abs(localMax) * 0.1);
+    }
+
+    customPlot->yAxis->setRange(localMin - padding, localMax + padding);
+
+    if (m_label) {
+        m_label->refreshGeometryForCurrentAxes();
+    } else {
+        customPlot->replot(QCustomPlot::rpQueuedReplot);
+    }
 }
 
 void KinematicVisualizer::visualizeSpectrogram(
@@ -254,6 +343,15 @@ void KinematicVisualizer::visualizeSpectrogram(
 
     // Remember old x-range BEFORE resetting plot appearance
     QCPRange oldRange = customPlot->xAxis->range();
+
+    // Preserve the current vertical cursor line state, if one is visible
+    bool restoreVerticalCursor = false;
+    double cursorX = 0.0;
+
+    if (auto *vLine = vLinesMap.value(customPlot, nullptr)) {
+        restoreVerticalCursor = vLine->visible();
+        cursorX = vLine->start->coords().x();
+    }
 
     // Reset plot appearance & plottables
     setupCustomPlot();
@@ -322,6 +420,15 @@ void KinematicVisualizer::visualizeSpectrogram(
     // No legend entry
     colorMap->setName(QString());
 
+    // Restore the vertical cursor line if it was visible before the rebuild
+    if (restoreVerticalCursor) {
+        if (auto *vLine = vLinesMap.value(customPlot, nullptr)) {
+            vLine->start->setCoords(cursorX, customPlot->yAxis->range().lower);
+            vLine->end->setCoords(cursorX, customPlot->yAxis->range().upper);
+            vLine->setVisible(true);
+        }
+    }
+
     // Make sure it actually repaints now
     customPlot->replot(QCustomPlot::rpQueuedReplot);
 }
@@ -357,13 +464,10 @@ void KinematicVisualizer::setSignalData(const QMap<QString, QVector<double>> &da
 }
 
 void KinematicVisualizer::clearSelectionRect() {
-    if (selectionRect) {
-        if (selectionRect->parentPlot())
-            selectionRect->parentPlot()->removeItem(selectionRect);
-        selectionRect = nullptr;
-    }
-    // Remove boundary lines and text labels from every plot
+    // Remove selection rectangles, boundary lines, and labels from every plot
     for (QCustomPlot* plot : customPlots) {
+        if (globalSelectionRects.contains(plot))
+            plot->removeItem(globalSelectionRects.value(plot));
         if (globalSelectionLeftLines.contains(plot))
             plot->removeItem(globalSelectionLeftLines.value(plot));
         if (globalSelectionRightLines.contains(plot))
@@ -374,8 +478,13 @@ void KinematicVisualizer::clearSelectionRect() {
             plot->removeItem(globalSelectionRightLabels.value(plot));
         if (globalSelectionDistanceLabels.contains(plot))
             plot->removeItem(globalSelectionDistanceLabels.value(plot));
-        plot->update();
+
+        plot->replot(QCustomPlot::rpQueuedReplot);
     }
+
+    selectionRect = nullptr;
+
+    globalSelectionRects.clear();
     globalSelectionLeftLines.clear();
     globalSelectionRightLines.clear();
     globalSelectionLeftLabels.clear();
@@ -417,12 +526,9 @@ bool KinematicVisualizer::eventFilter(QObject *object, QEvent *event) {
     return QWidget::eventFilter(object, event);
 }
 
-void KinematicVisualizer::mouseMoveEvent(QMouseEvent *event) {
-    if (customPlot->viewport().contains(event->pos())) {
-        cursorPos = event->pos();
-        updateCursorItems(customPlot);
-        if (selecting) onMouseDrag();
-    }
+void KinematicVisualizer::mouseMoveEvent(QMouseEvent *event)
+{
+    QWidget::mouseMoveEvent(event);
 }
 
 void KinematicVisualizer::paintEvent(QPaintEvent *event) {
@@ -440,7 +546,7 @@ void KinematicVisualizer::setupCursorItems(QCustomPlot *plot) {
     // Per-plot vertical line (shared across instances via map)
     auto *vLine = new QCPItemLine(plot);
     vLine->setLayer("overlay");
-    vLine->setPen(QPen(Qt::darkRed, 1, Qt::SolidLine));
+    vLine->setPen(QPen(Qt::red, 1, Qt::SolidLine));
     vLine->start->setType(QCPItemPosition::ptPlotCoords);
     vLine->end->setType(QCPItemPosition::ptPlotCoords);
     vLine->setSelectable(false);
@@ -451,7 +557,7 @@ void KinematicVisualizer::setupCursorItems(QCustomPlot *plot) {
     if (plot == customPlot) {
         hLine = new QCPItemLine(plot);
         hLine->setLayer("overlay");
-        hLine->setPen(QPen(Qt::darkRed, 1, Qt::SolidLine));
+        hLine->setPen(QPen(Qt::red, 1, Qt::SolidLine));
         hLine->start->setType(QCPItemPosition::ptPlotCoords);
         hLine->end->setType(QCPItemPosition::ptPlotCoords);
         hLine->setSelectable(false);
@@ -500,13 +606,9 @@ void KinematicVisualizer::updateCursorItems(QCustomPlot *plot) {
         }
     }
 
-    // Clear all verticals, then show active one
-    hideAllVerticalLines();
-    if (auto *vLine = vLinesMap.value(plot, nullptr)) {
-        vLine->start->setCoords(x, plot->yAxis->range().lower);
-        vLine->end->setCoords(x, plot->yAxis->range().upper);
-        vLine->setVisible(true);
-    }
+    // Keep vertical lines visible while the cursor is inside a plot.
+    // We update their X position below for all plots, so there is no need
+    // to hide and re-show them on every mouse move.
 
     // Main-plot horizontal cursor + text
     if (plot == customPlot) {
@@ -554,7 +656,7 @@ void KinematicVisualizer::updateCursorItems(QCustomPlot *plot) {
             QPoint(leftX + padding, topY));
         coordText->setVisible(true);
 
-        customPlot->replot();
+        customPlot->replot(QCustomPlot::rpQueuedReplot);
     }
 
     // Mirror the active X line across all plots
@@ -573,7 +675,7 @@ void KinematicVisualizer::hideHorizontalCursor() {
     if (hLine)      hLine->setVisible(false);
     if (coordText)  coordText->setVisible(false);
     if (coordFrame) coordFrame->setVisible(false);
-    customPlot->replot();
+    customPlot->replot(QCustomPlot::rpQueuedReplot);
 }
 
 void KinematicVisualizer::updateVerticalLineInAllPlots(double x) {
@@ -582,11 +684,10 @@ void KinematicVisualizer::updateVerticalLineInAllPlots(double x) {
             v->start->setCoords(x, plot->yAxis->range().lower);
             v->end->setCoords(x, plot->yAxis->range().upper);
             v->setVisible(true);
-            plot->replot();
+            plot->replot(QCustomPlot::rpQueuedReplot);
         }
     }
 }
-
 
 // ---------- Selection band logic ----------
 void KinematicVisualizer::onAnyMousePress(QMouseEvent *event) {
@@ -625,7 +726,7 @@ void KinematicVisualizer::onMouseRelease() {
         const double deltaX   = releaseX - m_pressX;
         if (m_label) m_label->moveHandleBy(m_clickedHandle, deltaX);
         m_clickedHandle = nullptr;
-        customPlot->update();
+        customPlot->replot(QCustomPlot::rpQueuedReplot);
         return;
     }
 
@@ -636,7 +737,7 @@ void KinematicVisualizer::onMouseRelease() {
             customPlot->xAxis->pixelToCoord(cursorPos.x()),
             customPlot->yAxis->range().lower
             );
-        customPlot->replot();
+        customPlot->replot(QCustomPlot::rpQueuedReplot);
     } else {
         clearSelectionRect();
     }
@@ -651,16 +752,34 @@ void KinematicVisualizer::onMouseDrag() {
         if ((cursorPos - m_pressPos).manhattanLength() < dragThreshold)
             return;
 
+        // Keep the active plot rectangle pointer for existing logic
         selectionRect = new QCPItemRect(customPlot);
+        selectionRect->setLayer("overlay");
         selectionRect->setPen(QPen(Qt::NoPen));
         selectionRect->setBrush(QBrush(QColor(255, 0, 0, 50)));
+        selectionRect->topLeft->setType(QCPItemPosition::ptPlotCoords);
+        selectionRect->bottomRight->setType(QCPItemPosition::ptPlotCoords);
         selectionRect->topLeft->setCoords(m_pressX, customPlot->yAxis->range().upper);
         selectionRect->bottomRight->setCoords(m_pressX, customPlot->yAxis->range().lower);
+        globalSelectionRects[customPlot] = selectionRect;
 
-        // Create boundary lines + labels in every plot now
+        // Create rectangles, boundary lines, and labels in every plot now
         for (QCustomPlot* plot : customPlots) {
+            if (plot != customPlot) {
+                auto *rect = new QCPItemRect(plot);
+                rect->setLayer("overlay");
+                rect->setPen(QPen(Qt::NoPen));
+                rect->setBrush(QBrush(QColor(255, 0, 0, 20))); // lighter alpha for other plots
+                rect->topLeft->setType(QCPItemPosition::ptPlotCoords);
+                rect->bottomRight->setType(QCPItemPosition::ptPlotCoords);
+                rect->topLeft->setCoords(m_pressX, plot->yAxis->range().upper);
+                rect->bottomRight->setCoords(m_pressX, plot->yAxis->range().lower);
+                globalSelectionRects[plot] = rect;
+            }
+
             // Left boundary
             auto *leftLine = new QCPItemLine(plot);
+            leftLine->setLayer("overlay");
             leftLine->setPen(QPen(Qt::red, 1, Qt::DotLine));
             leftLine->start->setType(QCPItemPosition::ptPlotCoords);
             leftLine->end->setType(QCPItemPosition::ptPlotCoords);
@@ -668,8 +787,9 @@ void KinematicVisualizer::onMouseDrag() {
             leftLine->end->setCoords(m_pressX, plot->yAxis->range().upper);
             globalSelectionLeftLines[plot] = leftLine;
 
-            // Right boundary (starts at press X)
+            // Right boundary
             auto *rightLine = new QCPItemLine(plot);
+            rightLine->setLayer("overlay");
             rightLine->setPen(QPen(Qt::red, 1, Qt::DotLine));
             rightLine->start->setType(QCPItemPosition::ptPlotCoords);
             rightLine->end->setType(QCPItemPosition::ptPlotCoords);
@@ -680,6 +800,7 @@ void KinematicVisualizer::onMouseDrag() {
             // Labels only on the active plot
             if (plot == customPlot) {
                 auto *leftLabel = new QCPItemText(plot);
+                leftLabel->setLayer("textOverlay");
                 leftLabel->setFont(QFont("Arial", 10));
                 leftLabel->setColor(Qt::darkRed);
                 leftLabel->position->setType(QCPItemPosition::ptPlotCoords);
@@ -689,6 +810,7 @@ void KinematicVisualizer::onMouseDrag() {
                 globalSelectionLeftLabels[plot] = leftLabel;
 
                 auto *rightLabel = new QCPItemText(plot);
+                rightLabel->setLayer("textOverlay");
                 rightLabel->setFont(QFont("Arial", 10));
                 rightLabel->setColor(Qt::darkRed);
                 rightLabel->position->setType(QCPItemPosition::ptPlotCoords);
@@ -698,6 +820,7 @@ void KinematicVisualizer::onMouseDrag() {
                 globalSelectionRightLabels[plot] = rightLabel;
 
                 auto *distLabel = new QCPItemText(plot);
+                distLabel->setLayer("textOverlay");
                 distLabel->setFont(QFont("Arial", 10));
                 distLabel->setColor(Qt::darkRed);
                 distLabel->setClipToAxisRect(false);
@@ -721,6 +844,12 @@ void KinematicVisualizer::onMouseDrag() {
 
         for (QCustomPlot* plot : customPlots) {
             const double leftX = selectionRect->topLeft->coords().x();
+
+            if (globalSelectionRects.contains(plot)) {
+                auto *rect = globalSelectionRects.value(plot);
+                rect->topLeft->setCoords(leftX, plot->yAxis->range().upper);
+                rect->bottomRight->setCoords(newRightX, plot->yAxis->range().lower);
+            }
 
             if (globalSelectionLeftLines.contains(plot)) {
                 auto *leftLine = globalSelectionLeftLines.value(plot);
@@ -758,23 +887,27 @@ void KinematicVisualizer::onMouseDrag() {
                     distLabel->setVisible(distance >= textCoordW);
                 }
             }
-            plot->replot();
+            plot->replot(QCustomPlot::rpQueuedReplot);
         }
     }
 
-    customPlot->replot();
+    customPlot->replot(QCustomPlot::rpQueuedReplot);
 }
 
 
 // ---------- Syncing ----------
-void KinematicVisualizer::synchronizePlots(const QCPRange &newRange) {
+void KinematicVisualizer::synchronizePlots(const QCPRange &newRange)
+{
     for (QCustomPlot *plot : customPlots) {
-        if (plot == customPlot) continue;
+        if (plot == customPlot)
+            continue;
+
         plot->blockSignals(true);
         plot->xAxis->setRange(newRange);
         plot->xAxis2->setRange(newRange);
-        plot->update();
         plot->blockSignals(false);
+
+        plot->replot(QCustomPlot::rpQueuedReplot);
     }
 }
 
