@@ -36,6 +36,7 @@
 #include <QColor>
 #include <QDateTime>
 #include <QProgressDialog>
+#include <QSignalBlocker>
 
 #include <QAction>
 #include <QDialog>
@@ -52,7 +53,6 @@
 #include <fstream>
 #include <limits>
 #include <cmath>
-#include <sstream>
 #include <thread>
 
 // ---------------------- Constructor / Destructor ----------------------
@@ -117,20 +117,8 @@ mainWindow::mainWindow(QWidget *parent)
 
     // ----- Context shortcuts on specific widgets (so Delete/Enter do the right thing) -----
 
-    // Files list: Enter = view/CSV, Delete = remove file(s)
+    // Files list: Delete = remove file(s)
     {
-        auto mk = [this](int key){
-            auto sc = new QShortcut(QKeySequence(key), ui->filesListView);
-            sc->setContext(Qt::WidgetWithChildrenShortcut);
-            return sc;
-        };
-        for (int k : {Qt::Key_Return, Qt::Key_Enter}) {
-            auto scEnter = mk(k);
-            connect(scEnter, &QShortcut::activated, this, [this]{
-                const QModelIndex idx = ui->filesListView->currentIndex();
-                if (idx.isValid()) onSpanFileDoubleClicked(idx); // reuses your double-click handler
-            });
-        }
         auto scDel = new QShortcut(QKeySequence(Qt::Key_Delete), ui->filesListView);
         scDel->setContext(Qt::WidgetWithChildrenShortcut);
         connect(scDel, &QShortcut::activated, this, [this]{ removeSelectedSpanFiles(); });
@@ -217,14 +205,14 @@ mainWindow::mainWindow(QWidget *parent)
         if (!filesView || !filesView->model())
             return;
 
-        // Fit to contents
-        filesView->resizeColumnToContents(0); // File
-        filesView->resizeColumnToContents(1); // Type
+        const int total = filesView->viewport()->width();
+        if (total <= 0)
+            return;
 
-        // Optional: cap the File column so it doesn't eat the whole view
-        const int maxFileColWidth = 400;  // tweak or remove if undesired
-        if (filesView->columnWidth(0) > maxFileColWidth)
-            filesView->setColumnWidth(0, maxFileColWidth);
+        // Initial proportions: File | Type | Last modified
+        filesView->setColumnWidth(0, int(total * 0.50));
+        filesView->setColumnWidth(1, int(total * 0.15));
+        filesView->setColumnWidth(2, int(total * 0.35));
     };
 
     // Run once after the first layout pass
@@ -383,6 +371,29 @@ mainWindow::mainWindow(QWidget *parent)
                 this, &mainWindow::onSpecDefaultsButtonClicked);
     }
 
+    // ---------- Landmark threshold controls ----------
+    if (ui->landmarkThresholdSpinBox) {
+        ui->landmarkThresholdSpinBox->setRange(0.01, 0.50);
+        ui->landmarkThresholdSpinBox->setSingleStep(0.01);
+        ui->landmarkThresholdSpinBox->setValue(m_appliedVelocityThresholdFraction);
+    }
+
+    if (ui->reopeningDeadbandSpinBox) {
+        ui->reopeningDeadbandSpinBox->setRange(0.00, 0.20);
+        ui->reopeningDeadbandSpinBox->setSingleStep(0.01);
+        ui->reopeningDeadbandSpinBox->setValue(m_appliedReopeningDeadbandFraction);
+    }
+
+    if (ui->landmarkApplyButton) {
+        connect(ui->landmarkApplyButton, &QPushButton::clicked,
+                this, &mainWindow::onLandmarkDetectionApplyClicked);
+    }
+
+    if (ui->landmarkDefaultsButton) {
+        connect(ui->landmarkDefaultsButton, &QPushButton::clicked,
+                this, &mainWindow::onLandmarkDetectionDefaultsClicked);
+    }
+
     // 3D Visualizer
     initSensor3DMain();
 
@@ -445,7 +456,115 @@ void mainWindow::syncAudioWidthToKinematicViewport()
     ui->audioContainer->updateGeometry();
 }
 
+void mainWindow::cacheCurrentLandmarksForSession()
+{
+    if (!currentSpan)
+        return;
 
+    const QString key = QString::fromStdString(currentSpan->path);
+
+    QVector<SessionLandmark> cached;
+    cached.reserve(landmarkListModel->rowCount());
+
+    for (int row = 0; row < landmarkListModel->rowCount(); ++row) {
+        if (!landmarkListModel->item(row, 0) ||
+            !landmarkListModel->item(row, 1) ||
+            !landmarkListModel->item(row, 2))
+            continue;
+
+        bool ok = false;
+        const double offset = landmarkListModel->item(row, 2)->text().toDouble(&ok);
+        if (!ok)
+            continue;
+
+        SessionLandmark lm;
+        lm.name    = landmarkListModel->item(row, 0)->text();
+        lm.channel = landmarkListModel->item(row, 1)->text();
+        lm.offset  = offset;
+        cached.push_back(lm);
+    }
+
+    if (cached.isEmpty())
+        m_sessionLandmarksByFile.remove(key);
+    else
+        m_sessionLandmarksByFile.insert(key, cached);
+}
+
+void mainWindow::restoreSessionLandmarksForCurrentSpan()
+{
+    if (!currentSpan)
+        return;
+
+    const QString key = QString::fromStdString(currentSpan->path);
+    if (!m_sessionLandmarksByFile.contains(key))
+        return;
+
+    const QVector<SessionLandmark> cached = m_sessionLandmarksByFile.value(key);
+    if (cached.isEmpty())
+        return;
+
+    for (const SessionLandmark &lm : cached) {
+        for (auto *visualizer : kinematicVisualizers) {
+            if (!visualizer)
+                continue;
+
+            if (visualizer->configName().trimmed() != lm.channel.trimmed())
+                continue;
+
+            if (Label *lbl = visualizer->getLabel()) {
+                lbl->placeLabelAt(lm.offset, lm.name);
+            }
+            break;
+        }
+    }
+
+    for (auto *visualizer : kinematicVisualizers) {
+        if (visualizer && visualizer->getCustomPlot())
+            visualizer->getCustomPlot()->replot(QCustomPlot::rpQueuedReplot);
+    }
+
+    if (landmarkListModel->rowCount() > 0)
+        enableConfigureTabButtons(true);
+
+    syncGlobalLandmarkCounterFromModel();
+}
+
+void mainWindow::syncGlobalLandmarkCounterFromModel()
+{
+    int maxAutoIndex = 0;
+    const QRegularExpression rx(QStringLiteral("^name(\\d+)$"),
+                                QRegularExpression::CaseInsensitiveOption);
+
+    for (int row = 0; row < landmarkListModel->rowCount(); ++row) {
+        if (!landmarkListModel->item(row, 0))
+            continue;
+
+        const QString name = landmarkListModel->item(row, 0)->text().trimmed();
+        const QRegularExpressionMatch m = rx.match(name);
+        if (!m.hasMatch())
+            continue;
+
+        bool ok = false;
+        const int n = m.captured(1).toInt(&ok);
+        if (ok && n > maxAutoIndex)
+            maxAutoIndex = n;
+    }
+
+    globalNameCounter = maxAutoIndex + 1;
+    if (globalNameCounter < 1)
+        globalNameCounter = 1;
+}
+
+void mainWindow::applyLandmarkDetectionSettingsToAllLabels()
+{
+    for (Label *lbl : m_allLabels) {
+        if (!lbl)
+            continue;
+
+        lbl->setVelocityThresholdFraction(m_appliedVelocityThresholdFraction);
+        lbl->setReopeningDeadbandFraction(m_appliedReopeningDeadbandFraction);
+    }
+}
 
 void mainWindow::resetToDefaults()
 {
@@ -1047,15 +1166,21 @@ double mainWindow::getLandmarkYValue(const QString &channelName, double offset) 
 void mainWindow::autoAnnotateChannelAtTime(const QString &channelName,
                                            double timeSeconds)
 {
-    if (timeSeconds < xAxisMinLimit) timeSeconds = xAxisMinLimit;
-    if (timeSeconds > xAxisMaxLimit) timeSeconds = xAxisMaxLimit;
+    if (timeSeconds < xAxisMinLimit)
+        timeSeconds = xAxisMinLimit;
+    if (timeSeconds > xAxisMaxLimit)
+        timeSeconds = xAxisMaxLimit;
 
     for (auto *visualizer : kinematicVisualizers) {
+        if (!visualizer)
+            continue;
+
         if (visualizer->configName().trimmed() != channelName.trimmed())
             continue;
 
         QCustomPlot *plot = visualizer->getCustomPlot();
-        if (!plot) continue;
+        if (!plot)
+            continue;
 
         // Store the desired X (seconds) directly on the plot.
         plot->setProperty("autoAnnotateX", timeSeconds);
@@ -1063,8 +1188,12 @@ void mainWindow::autoAnnotateChannelAtTime(const QString &channelName,
         const QRect ar = plot->axisRect()->rect();
         const QPoint pos(ar.center().x(), ar.center().y());
 
+        const QPointF localPos(pos);
+        const QPointF globalPos(plot->mapToGlobal(pos));
+
         QMouseEvent ev(QEvent::MouseButtonPress,
-                       pos,
+                       localPos,
+                       globalPos,
                        Qt::RightButton,
                        Qt::RightButton,
                        Qt::ShiftModifier);
@@ -1084,6 +1213,31 @@ void mainWindow::onSpecApplyButtonClicked()
     if (!currentSpan) return;
     rebuildSpectrogramForVisibleRange();
 }
+
+void mainWindow::onLandmarkDetectionApplyClicked()
+{
+    if (ui->landmarkThresholdSpinBox) {
+        m_appliedVelocityThresholdFraction = ui->landmarkThresholdSpinBox->value();
+    }
+
+    if (ui->reopeningDeadbandSpinBox) {
+        m_appliedReopeningDeadbandFraction = ui->reopeningDeadbandSpinBox->value();
+    }
+
+    applyLandmarkDetectionSettingsToAllLabels();
+}
+
+void mainWindow::onLandmarkDetectionDefaultsClicked()
+{
+    if (ui->landmarkThresholdSpinBox) {
+        ui->landmarkThresholdSpinBox->setValue(0.20);
+    }
+
+    if (ui->reopeningDeadbandSpinBox) {
+        ui->reopeningDeadbandSpinBox->setValue(0.05);
+    }
+}
+
 
 
 void mainWindow::onSpecDefaultsButtonClicked()
@@ -1737,10 +1891,17 @@ void mainWindow::getCSVFileButtonClicked()
     const QFileInfo spanFileInfo(spanPath);
     const QString defaultName = spanFileInfo.completeBaseName() + ".csv";
 
+    const QString initialDir =
+        lastCsvExportDir.isEmpty()
+            ? spanFileInfo.absolutePath()
+            : lastCsvExportDir;
+
+    const QString initialPath = QDir(initialDir).filePath(defaultName);
+
     const QString csvFilePath = QFileDialog::getSaveFileName(
         this,
         tr("Save CSV File"),
-        spanFileInfo.absolutePath() + "/" + defaultName,
+        initialPath,
         tr("CSV Files (*.csv)")
         );
 
@@ -1750,7 +1911,10 @@ void mainWindow::getCSVFileButtonClicked()
     QString error;
     if (!writeCurrentLandmarksToCsv(csvFilePath, &error, true)) {
         QMessageBox::warning(this, tr("CSV Error"), error);
+        return;
     }
+
+    lastCsvExportDir = QFileInfo(csvFilePath).absolutePath();
 }
 
 
@@ -1775,47 +1939,40 @@ void mainWindow::clearAllLandmarks() {
     enableConfigureTabButtons(false);
 }
 
-static inline bool isProtectedLandmarkName(const QString& name)
-{
-    const QString n = name.trimmed().toLower();
-    static const QSet<QString> protectedSet = {
-        "maxc", "gons", "pvel1", "pvel2", "noffs", "goffs"
-    };
-    return protectedSet.contains(n);
-}
-
-
 void mainWindow::removeSelectedLandmark()
 {
     QModelIndex idx = ui->landmarkListView->currentIndex();
-    if (!idx.isValid()) return;
+    if (!idx.isValid())
+        return;
 
-    const QString name = idx.siblingAtColumn(0).data().toString();
     const QString chan = idx.siblingAtColumn(1).data().toString();
     const double  x    = idx.siblingAtColumn(2).data().toDouble();
 
-    if (isProtectedLandmarkName(name)) {
-        QMessageBox::information(this, "Protected",
-                                 "This landmark is protected and cannot be removed.");
-        return;
-    }
-
-    // Remove from plots first
+    // Remove only from the matching plot/channel
     for (auto v : kinematicVisualizers) {
-        if (auto plot = v->getCustomPlot()) {
-            if (auto lbl = v->getLabel()) {
-                lbl->removeLabelAt(x, chan);
-                lbl->clearSelectedLine();
-            }
-            plot->replot();
+        if (!v)
+            continue;
+
+        if (v->configName().trimmed() != chan.trimmed())
+            continue;
+
+        if (auto lbl = v->getLabel()) {
+            lbl->removeLabelAt(x, chan);
+            lbl->clearSelectedLine();
         }
+
+        if (auto plot = v->getCustomPlot())
+            plot->replot();
+
+        break; // only one matching visualizer should handle this landmark
     }
 
-    // Remove the row
+    // Remove the selected row from the model
     landmarkListModel->removeRow(idx.row());
     ui->landmarkListView->clearSelection();
 
-    if (landmarkListModel->rowCount() == 0) enableConfigureTabButtons(false);
+    if (landmarkListModel->rowCount() == 0)
+        enableConfigureTabButtons(false);
 }
 
 void mainWindow::removeLandmarkFromModel(double x) {
@@ -1832,61 +1989,78 @@ void mainWindow::removeLandmarkFromModel(double x) {
 
 void mainWindow::zoomInButtonClicked()
 {
+    if (kinematicVisualizers.isEmpty())
+        return;
+
+    QCustomPlot *plot = kinematicVisualizers.first()->getCustomPlot();
+    if (!plot)
+        return;
+
     const double zoomFactor = 0.98; // in
-    for (auto visualizer : kinematicVisualizers) {
-        QCustomPlot *plot = visualizer->getCustomPlot();
-        if (!plot) continue;
 
-        QCPRange currentRange = plot->xAxis->range();
-        double rangeSize = currentRange.size();
-        double center    = currentRange.center();
+    QCPRange currentRange = plot->xAxis->range();
+    double rangeSize = currentRange.size();
+    double center    = currentRange.center();
 
-        double halfRange = (rangeSize * zoomFactor) / 2.0;
-        double lower = std::max(center - halfRange, xAxisMinLimit);
-        double upper = std::min(center + halfRange, xAxisMaxLimit);
+    double halfRange = (rangeSize * zoomFactor) / 2.0;
+    double lower = std::max(center - halfRange, xAxisMinLimit);
+    double upper = std::min(center + halfRange, xAxisMaxLimit);
 
-        plot->xAxis->setRange(lower, upper);
-        plot->replot();
-    }
+    plot->xAxis->setRange(lower, upper);
+    plot->xAxis2->setRange(lower, upper);
+    plot->replot(QCustomPlot::rpQueuedReplot);
+
     updateScrollBar();
     rebuildSpectrogramForVisibleRange();
 }
 
 void mainWindow::zoomOutButtonClicked()
 {
+    if (kinematicVisualizers.isEmpty())
+        return;
+
+    QCustomPlot *plot = kinematicVisualizers.first()->getCustomPlot();
+    if (!plot)
+        return;
+
     const double zoomFactor = 1.02; // out
-    for (auto visualizer : kinematicVisualizers) {
-        QCustomPlot *plot = visualizer->getCustomPlot();
-        if (!plot) continue;
 
-        QCPRange currentRange = plot->xAxis->range();
-        double rangeSize = currentRange.size();
-        double center    = currentRange.center();
+    QCPRange currentRange = plot->xAxis->range();
+    double rangeSize = currentRange.size();
+    double center    = currentRange.center();
 
-        double halfRange = (rangeSize * zoomFactor) / 2.0;
-        double lower = std::max(center - halfRange, xAxisMinLimit);
-        double upper = std::min(center + halfRange, xAxisMaxLimit);
+    double halfRange = (rangeSize * zoomFactor) / 2.0;
+    double lower = std::max(center - halfRange, xAxisMinLimit);
+    double upper = std::min(center + halfRange, xAxisMaxLimit);
 
-        plot->xAxis->setRange(lower, upper);
-        plot->replot();
-    }
+    plot->xAxis->setRange(lower, upper);
+    plot->xAxis2->setRange(lower, upper);
+    plot->replot(QCustomPlot::rpQueuedReplot);
+
     updateScrollBar();
     rebuildSpectrogramForVisibleRange();
 }
 
-void mainWindow::resetButtonClicked() {
-    for (auto visualizer : kinematicVisualizers) {
-        if (auto plot = visualizer->getCustomPlot()) {
-            plot->xAxis->setRange(xAxisMinLimit, xAxisMaxLimit);
-            plot->replot();
-        }
-    }
+void mainWindow::resetButtonClicked()
+{
+    if (kinematicVisualizers.isEmpty())
+        return;
+
+    QCustomPlot *plot = kinematicVisualizers.first()->getCustomPlot();
+    if (!plot)
+        return;
+
+    plot->xAxis->setRange(xAxisMinLimit, xAxisMaxLimit);
+    plot->xAxis2->setRange(xAxisMinLimit, xAxisMaxLimit);
+    plot->replot(QCustomPlot::rpQueuedReplot);
+
     updateScrollBar();
     rebuildSpectrogramForVisibleRange();
 }
 
 
-void mainWindow::on_selectButton_clicked() {
+void mainWindow::on_selectButton_clicked()
+{
     double selectionStart = std::numeric_limits<double>::max();
     double selectionEnd   = std::numeric_limits<double>::lowest();
     bool hasSelection = false;
@@ -1899,19 +2073,27 @@ void mainWindow::on_selectButton_clicked() {
             hasSelection = true;
         }
     }
-    if (!hasSelection) return;
+
+    if (!hasSelection)
+        return;
+
+    if (kinematicVisualizers.isEmpty())
+        return;
+
+    QCustomPlot *plot = kinematicVisualizers.first()->getCustomPlot();
+    if (!plot)
+        return;
 
     double newCenter = (selectionStart + selectionEnd) / 2.0;
     double newRange  = selectionEnd - selectionStart;
 
-    for (auto visualizer : kinematicVisualizers) {
-        if (auto plot = visualizer->getCustomPlot()) {
-            double newLower = std::max(xAxisMinLimit, newCenter - newRange / 2.0);
-            double newUpper = std::min(xAxisMaxLimit, newCenter + newRange / 2.0);
-            plot->xAxis->setRange(newLower, newUpper);
-            plot->replot();
-        }
-    }
+    double newLower = std::max(xAxisMinLimit, newCenter - newRange / 2.0);
+    double newUpper = std::min(xAxisMaxLimit, newCenter + newRange / 2.0);
+
+    plot->xAxis->setRange(newLower, newUpper);
+    plot->xAxis2->setRange(newLower, newUpper);
+    plot->replot(QCustomPlot::rpQueuedReplot);
+
     updateScrollBar();
     rebuildSpectrogramForVisibleRange();
 }
@@ -2182,7 +2364,7 @@ void mainWindow::visualizeSignal(spanFile &data) {
         QMap<QString, QVector<double>> audioDataMap;
         audioDataMap["Audio"] = audioDataVector;
 
-        audioVisualizer->visualizeSignal(audioDataMap, "Audio", 1, data.wavSR);
+        audioVisualizer->visualizeSignal(audioDataMap, "Audio", 1.5, data.wavSR);
 
         // update 3D when moving the mouse over the audio plot
         if (QCustomPlot *plot = audioVisualizer->getCustomPlot()) {
@@ -2228,6 +2410,9 @@ void mainWindow::visualizeSignal(spanFile &data) {
             connect(label, &Label::labelClicked,  this, &mainWindow::onLabelClicked);
             connect(label, &Label::labelMoved,    this, &mainWindow::onLabelMoved, Qt::DirectConnection);
             m_allLabels.push_back(label);
+
+            label->setVelocityThresholdFraction(m_appliedVelocityThresholdFraction);
+            label->setReopeningDeadbandFraction(m_appliedReopeningDeadbandFraction);
         }
 
         QTimer::singleShot(0, this, [this]{ syncAudioWidthToKinematicViewport(); });
@@ -2391,6 +2576,9 @@ void mainWindow::visualizeSignal(spanFile &data) {
             connect(label, &Label::labelClicked,  this, &mainWindow::onLabelClicked);
             connect(label, &Label::labelMoved,    this, &mainWindow::onLabelMoved, Qt::DirectConnection);
             m_allLabels.push_back(label);
+
+            label->setVelocityThresholdFraction(m_appliedVelocityThresholdFraction);
+            label->setReopeningDeadbandFraction(m_appliedReopeningDeadbandFraction);
         }
     }
 
@@ -2444,6 +2632,11 @@ void mainWindow::addLandmarkToModel(const QString &channel,
 
 void mainWindow::updateScrollBar()
 {
+    if (!ui->rangeScrollBar)
+        return;
+
+    QSignalBlocker blocker(ui->rangeScrollBar);
+
     if (kinematicVisualizers.isEmpty()) {
         ui->rangeScrollBar->setVisible(false);
         ui->rangeScrollBar->setEnabled(false);
@@ -2451,10 +2644,16 @@ void mainWindow::updateScrollBar()
     }
 
     QCustomPlot *plot = kinematicVisualizers.first()->getCustomPlot();
-    double currentRangeSize = plot->xAxis->range().size();
-    double fullRange = xAxisMaxLimit - xAxisMinLimit;
+    if (!plot) {
+        ui->rangeScrollBar->setVisible(false);
+        ui->rangeScrollBar->setEnabled(false);
+        return;
+    }
 
-    if (currentRangeSize >= fullRange) {
+    const double currentRangeSize = plot->xAxis->range().size();
+    const double fullRange = xAxisMaxLimit - xAxisMinLimit;
+
+    if (fullRange <= 0.0 || currentRangeSize >= fullRange) {
         ui->rangeScrollBar->setVisible(false);
         ui->rangeScrollBar->setEnabled(false);
         return;
@@ -2463,8 +2662,9 @@ void mainWindow::updateScrollBar()
     ui->rangeScrollBar->setVisible(true);
     ui->rangeScrollBar->setEnabled(true);
 
-    int precision = 1000;
-    int pageStep = static_cast<int>((currentRangeSize / fullRange) * precision);
+    const int precision = 1000;
+    const int pageStep = static_cast<int>((currentRangeSize / fullRange) * precision);
+
     if (pageStep <= 0 || pageStep >= precision) {
         ui->rangeScrollBar->setVisible(false);
         ui->rangeScrollBar->setEnabled(false);
@@ -2474,32 +2674,46 @@ void mainWindow::updateScrollBar()
     ui->rangeScrollBar->setPageStep(pageStep);
     ui->rangeScrollBar->setRange(0, precision - pageStep);
 
-    double currentCenter = plot->xAxis->range().center();
-    double minMovableCenter = xAxisMinLimit + currentRangeSize / 2.0;
-    double maxMovableCenter = xAxisMaxLimit - currentRangeSize / 2.0;
-    double normalizedValue = (currentCenter - minMovableCenter)
-                             / (maxMovableCenter - minMovableCenter);
-    int value = static_cast<int>(normalizedValue * (precision - pageStep));
+    const double currentCenter = plot->xAxis->range().center();
+    const double minMovableCenter = xAxisMinLimit + currentRangeSize / 2.0;
+    const double maxMovableCenter = xAxisMaxLimit - currentRangeSize / 2.0;
+
+    int value = 0;
+    if (maxMovableCenter > minMovableCenter) {
+        const double normalizedValue =
+            (currentCenter - minMovableCenter) / (maxMovableCenter - minMovableCenter);
+        value = static_cast<int>(normalizedValue * (precision - pageStep));
+    }
+
+    value = std::clamp(value, 0, precision - pageStep);
     ui->rangeScrollBar->setValue(value);
 }
 
-void mainWindow::onRangeScrollBarValueChanged(int value) {
-    if (kinematicVisualizers.isEmpty()) return;
+void mainWindow::onRangeScrollBarValueChanged(int value)
+{
+    if (kinematicVisualizers.isEmpty())
+        return;
 
     QCustomPlot *plot = kinematicVisualizers.first()->getCustomPlot();
-    double currentRangeSize = plot->xAxis->range().size();
-    double fullRange = xAxisMaxLimit - xAxisMinLimit;
+    if (!plot)
+        return;
 
-    int precision = 1000;
-    int pageStep = ui->rangeScrollBar->pageStep();
+    const double currentRangeSize = plot->xAxis->range().size();
 
-    double minMovableCenter = xAxisMinLimit + currentRangeSize / 2.0;
-    double maxMovableCenter = xAxisMaxLimit - currentRangeSize / 2.0;
+    const int precision = 1000;
+    const int pageStep = ui->rangeScrollBar->pageStep();
 
-    if (precision - pageStep <= 0) return;
+    const double minMovableCenter = xAxisMinLimit + currentRangeSize / 2.0;
+    const double maxMovableCenter = xAxisMaxLimit - currentRangeSize / 2.0;
 
-    double normalizedValue = static_cast<double>(value) / (precision - pageStep);
-    double newCenter = minMovableCenter + normalizedValue * (maxMovableCenter - minMovableCenter);
+    if (precision - pageStep <= 0)
+        return;
+
+    const double normalizedValue =
+        static_cast<double>(value) / (precision - pageStep);
+
+    const double newCenter =
+        minMovableCenter + normalizedValue * (maxMovableCenter - minMovableCenter);
 
     double newLower = newCenter - currentRangeSize / 2.0;
     double newUpper = newCenter + currentRangeSize / 2.0;
@@ -2513,13 +2727,9 @@ void mainWindow::onRangeScrollBarValueChanged(int value) {
         newLower = newUpper - currentRangeSize;
     }
 
-    for (auto visualizer : kinematicVisualizers) {
-        if (auto p = visualizer->getCustomPlot()) {
-            p->xAxis->setRange(newLower, newUpper);
-            p->xAxis2->setRange(newLower, newUpper);
-            p->replot();
-        }
-    }
+    plot->xAxis->setRange(newLower, newUpper);
+    plot->xAxis2->setRange(newLower, newUpper);
+    plot->replot(QCustomPlot::rpQueuedReplot);
 
     rebuildSpectrogramForVisibleRange();
 }
@@ -3213,6 +3423,9 @@ bool mainWindow::loadSpanIntoUi(const QString &filePath)
     if (suffix != "span")
         return false;
 
+    // Cache landmarks for the file currently open in the UI, before clearing it
+    cacheCurrentLandmarksForSession();
+
     // Clear old plots + landmarks + 3D view
     clearAllPlots();
     resetSensor3DView();
@@ -3257,25 +3470,14 @@ bool mainWindow::loadSpanIntoUi(const QString &filePath)
 
     reloadTemplatesForCurrentDir();
 
+    // Restore any landmarks remembered for this file during this app session
+    restoreSessionLandmarksForCurrentSpan();
+
     return true;
 }
 
 void mainWindow::viewSpanFile()
 {
-    // Warn about unsaved landmarks first
-    if (landmarkListModel->rowCount() > 0) {
-        QMessageBox::StandardButton reply = QMessageBox::question(
-            this, "Save Landmarks",
-            "You may have unsaved landmarks. Export before continuing?",
-            QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel
-            );
-        if (reply == QMessageBox::Yes) {
-            getCSVFileButtonClicked();
-        }
-        if (reply == QMessageBox::Cancel)
-            return;
-    }
-
     // Enforce: exactly ONE selected file
     auto *selModel = ui->filesListView->selectionModel();
     if (!selModel) {
@@ -3982,7 +4184,7 @@ void mainWindow::setupMenus()
     fileMenu->addSeparator();
 
     m_viewFileAction = addMenuAction(fileMenu, tr("&View"),
-                                     QKeySequence(Qt::Key_Return),
+                                     QKeySequence(),
                                      &mainWindow::viewSpanFile);
 
     m_fileInfoAction = addMenuAction(fileMenu, tr("File &Info"),
@@ -4304,21 +4506,21 @@ QString mainWindow::buildHelpHtml() const
 
         <h3>11. Useful shortcuts</h3>
         <ul>
-          <li><code>Ctrl+O</code>: Open files</li>
-          <li><code>Ctrl+Shift+P</code>: Open preprocessing window</li>
-          <li><code>Ctrl+I</code>: File info</li>
+          <li><code>⌘ O</code>: Open files</li>
+          <li><code>⌘ Shift P</code>: Open preprocessing window</li>
+          <li><code>⌘ I</code>: File info</li>
           <li><code>Enter</code>: View selected file</li>
-          <li><code>Ctrl+L</code>: Place labels</li>
+          <li><code>⌘ L</code>: Place labels</li>
           <li><code>Space</code>: Play / pause</li>
-          <li><code>Shift+Space</code>: Play selection</li>
+          <li><code>Shift Space</code>: Play selection</li>
           <li><code>Esc</code>: Stop playback</li>
           <li><code>S</code>: Select range</li>
-          <li><code>Ctrl++</code>: Zoom in</li>
-          <li><code>Ctrl+-</code>: Zoom out</li>
-          <li><code>Ctrl+0</code>: Reset view</li>
-          <li><code>Ctrl+E</code>: Export CSV</li>
-          <li><code>Ctrl+Shift+L</code>: Clear all landmarks</li>
-          <li><code>F1</code>: Open help</li>
+          <li><code>⌘ +</code>: Zoom in</li>
+          <li><code>⌘ -</code>: Zoom out</li>
+          <li><code>⌘ 0</code>: Reset view</li>
+          <li><code>⌘ E</code>: Export CSV</li>
+          <li><code>⌘ Shift L</code>: Clear all landmarks</li>
+          <li><code>⌘ ?</code>: Open help</li>
         </ul>
 
         <h3>12. Support</h3>
@@ -4358,18 +4560,18 @@ void mainWindow::setupTooltips()
     };
 
     // Files
-    tt(ui->addSpanFilesButton, "Ctrl+O");
+    tt(ui->addSpanFilesButton, "⌘ O");
     tt(ui->viewButton, "Display the current file.");
     tt(ui->preprocessButton, "Create .span files.");
     tt(ui->infoButton, "Show info for the current file.");
 
     // Playback / view
     tt(ui->playSoundButton, "Space");
-    tt(ui->playSelectionButton, "Shift+Space");
+    tt(ui->playSelectionButton, "Shift Space");
     tt(ui->stopSoundButton, "Esc");
-    tt(ui->zoomInButton, "Ctrl++");
-    tt(ui->zoomOutButton, "Ctrl+-");
-    tt(ui->resetButton, "Ctrl+0");
+    tt(ui->zoomInButton, "⌘ +");
+    tt(ui->zoomOutButton, "⌘ -");
+    tt(ui->resetButton, "⌘ 0");
     tt(ui->selectButton, "S");
 
     // Config tab
@@ -4398,8 +4600,8 @@ void mainWindow::setupTooltips()
     // Landmarking
     tt(ui->placeLabelsButton, "Place selected landmark labels on the current plots.");
     tt(ui->removeLandmarkButton, "Remove the selected landmark.");
-    tt(ui->clearAllLandmarkButton, "Ctrl+Shift+L");
-    tt(ui->getCSVFileButton, "Ctrl+E");
+    tt(ui->clearAllLandmarkButton, "⌘ Shift L");
+    tt(ui->getCSVFileButton, "⌘ E");
 
     // Templates / DTW
     if (ui->templateComboBox)
