@@ -20,8 +20,8 @@ public:
 
     // Rendering
     void visualizeSignal(const QMap<QString, QVector<double>> &dataMap,
-                         const QString &configName,
-                         int penWidth,
+                                              const QString &configName,
+                                              double penWidth,
                          int samplingRate);
 
     void visualizeSpectrogram(const QVector<QVector<double>> &spectrogramData,
@@ -132,6 +132,11 @@ private:
     double m_spectrogramStartTime { 0.0 };
 
 
+    // Audio auto-scale
+    QVector<QPair<double,double>> m_audioSignalFullRes;
+    bool m_autoScaleAudioY = false;
+
+    void rescaleAudioYAxisToVisibleRange(const QCPRange &range);
 
 
     // Static/shared across all visualizer instances
@@ -142,6 +147,7 @@ private:
     static QCustomPlot*                                 lastPlotWithLine;
     static QCPItemRect*                                 selectionRect;
 
+    static QHash<QCustomPlot*, QCPItemRect*>            globalSelectionRects;
     static QHash<QCustomPlot*, QCPItemLine*>            globalSelectionLeftLines;
     static QHash<QCustomPlot*, QCPItemLine*>            globalSelectionRightLines;
     static QHash<QCustomPlot*, QCPItemText*>            globalSelectionLeftLabels;
