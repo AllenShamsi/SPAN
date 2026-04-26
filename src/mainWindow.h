@@ -6,6 +6,7 @@
 #include <QItemSelection>
 #include <QVector>
 #include <QMap>
+#include <QHash>
 #include <QStringList>
 #include <QButtonGroup>
 #include <QTimer>
@@ -123,7 +124,7 @@ private slots:
     // File Info
     void showFileInfoDialog();
 
-    // Templates / DTW / spectrogram controls
+    // Templates / DTW / spectrogram controls / landmark controls
     void on_saveTemplateButton_clicked();
     void on_applyTemplateButton_clicked();
     void on_batchApplyTemplateButton_clicked();
@@ -132,6 +133,8 @@ private slots:
     void importTemplateFromFile();
     void onSpecApplyButtonClicked();
     void onSpecDefaultsButtonClicked();
+    void onLandmarkDetectionApplyClicked();
+    void onLandmarkDetectionDefaultsClicked();
 
 private:
     // UI enable helpers
@@ -157,6 +160,19 @@ private:
 
     bool m_updatingSpectrogram = false;
 
+    struct SessionLandmark
+    {
+        QString name;
+        QString channel;
+        double offset = 0.0;
+    };
+
+    QHash<QString, QVector<SessionLandmark>> m_sessionLandmarksByFile;
+
+    void cacheCurrentLandmarksForSession();
+    void restoreSessionLandmarksForCurrentSpan();
+    void syncGlobalLandmarkCounterFromModel();
+
     // Landmark helpers
     void addLandmarkToModel(const QString &channel, double offset, const QString &lblName);
     void removeLandmarkFromModel(double x);
@@ -179,6 +195,11 @@ private:
     double getLandmarkYValue(const QString &channelName, double offset) const;
 
     void updateSpectrogramColorScale();
+
+    double m_appliedVelocityThresholdFraction = 0.20;
+    double m_appliedReopeningDeadbandFraction = 0.05;
+
+    void applyLandmarkDetectionSettingsToAllLabels();
 
     // Audio worker
     void playSound(const std::vector<float> &audioData, int sampleRate);
@@ -234,6 +255,7 @@ private:
     QStringList       fileNames;
     QVector<QString>  spanFilesNames;
     QString           lastOpenedDir;
+    QString           lastCsvExportDir;
 
     QVector<KinematicVisualizer*> kinematicVisualizers;
     QVector<Label*>               m_allLabels;
