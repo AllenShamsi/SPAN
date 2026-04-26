@@ -126,15 +126,13 @@ Landmarks can be placed directly on the plots and reviewed in the landmark table
 - Remove selected landmarks with **Remove Landmark**
 - Remove all landmarks with **Clear All Landmarks**
 
-### Protected landmarks
-Some automatically derived or reserved landmark names are protected and cannot be removed individually.
-
 ### Landmark table
 The landmark table stores:
 
 - landmark name
 - channel
 - time offset
+- Y value at the landmark location
 
 ### CSV export
 Click **Export CSV** to save the current landmark table as a `.csv` file.
