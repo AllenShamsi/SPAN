@@ -254,8 +254,10 @@ void KinematicVisualizer::visualizeSignal(const QMap<QString, QVector<double>> &
         rescaleAudioYAxisToVisibleRange(customPlot->xAxis->range());
     }
 
-    // If "Audio" plot, show top axis with ticks/labels
-    if (configName == "Audio") {
+    const bool isAudio = (configName.compare("Audio", Qt::CaseInsensitive) == 0);
+
+    if (isAudio) {
+        // Audio keeps the minimalist style + top time axis
         customPlot->xAxis2->setVisible(true);
         customPlot->xAxis2->setTickLabels(true);
         customPlot->xAxis2->setTicks(true);
@@ -264,6 +266,48 @@ void KinematicVisualizer::visualizeSignal(const QMap<QString, QVector<double>> &
         customPlot->xAxis2->setBasePen(QPen(Qt::black));
         customPlot->xAxis2->setTickPen(QPen(Qt::black));
         customPlot->xAxis2->setSubTickPen(QPen(Qt::black));
+    } else {
+        // ---- 1) Sparse Y-axis ticks for kinematic plots ----
+
+        customPlot->yAxis->setTicks(true);
+        customPlot->yAxis->setTickLabels(true);
+        customPlot->yAxis->setSubTicks(false);
+
+        QPen axisPen(QColor(160, 160, 160));
+        customPlot->yAxis->setBasePen(axisPen);
+        customPlot->yAxis->setTickPen(axisPen);
+        customPlot->yAxis->setSubTickPen(Qt::NoPen);
+        customPlot->yAxis->setTickLabelColor(QColor(110, 110, 110));
+
+        QFont tickFont = font();
+        tickFont.setPointSize(8);
+        customPlot->yAxis->setTickLabelFont(tickFont);
+
+        QSharedPointer<QCPAxisTicker> yTicker(new QCPAxisTicker);
+        yTicker->setTickCount(4);   // sparse, readable
+        customPlot->yAxis->setTicker(yTicker);
+
+        // ---- 2) Subtle zero line ----
+        QVector<double> zx(2), zy(2);
+        zx[0] = 0.0;
+        zx[1] = maxTime;
+        zy[0] = 0.0;
+        zy[1] = 0.0;
+
+        QCPGraph *zeroGraph = customPlot->addGraph();
+        if (zeroGraph) {
+            QPen zeroPen(QColor(120, 120, 120, 140));
+            zeroPen.setStyle(Qt::DashLine);
+            zeroPen.setWidthF(1.0);
+            zeroPen.setCosmetic(true);
+
+            zeroGraph->setPen(zeroPen);
+            zeroGraph->setLineStyle(QCPGraph::lsLine);
+            zeroGraph->setBrush(Qt::NoBrush);
+            zeroGraph->setData(zx, zy);
+            zeroGraph->setName(QString());
+            zeroGraph->removeFromLegend();
+        }
     }
 
     customPlot->update();
@@ -678,13 +722,17 @@ void KinematicVisualizer::hideHorizontalCursor() {
     customPlot->replot(QCustomPlot::rpQueuedReplot);
 }
 
-void KinematicVisualizer::updateVerticalLineInAllPlots(double x) {
+void KinematicVisualizer::updateVerticalLineInAllPlots(double x)
+{
     for (QCustomPlot *plot : customPlots) {
         if (auto *v = vLinesMap.value(plot, nullptr)) {
             v->start->setCoords(x, plot->yAxis->range().lower);
             v->end->setCoords(x, plot->yAxis->range().upper);
             v->setVisible(true);
-            plot->replot(QCustomPlot::rpQueuedReplot);
+            if (plot == customPlot)
+                plot->replot(QCustomPlot::rpQueuedReplot);
+            else
+                plot->replot();
         }
     }
 }
@@ -694,10 +742,11 @@ void KinematicVisualizer::onAnyMousePress(QMouseEvent *event) {
     // If a label handle was pressed, handle that and skip selection logic
     const double pressX = customPlot->xAxis->pixelToCoord(event->pos().x());
 
-    // Skip selection logic for "auto landmarks" gesture
     if (event->button() == Qt::RightButton &&
         (event->modifiers() & Qt::ShiftModifier))
     {
+        selecting = false;
+        clearSelectionRect();
         return;
     }
 
@@ -840,7 +889,8 @@ void KinematicVisualizer::onMouseDrag() {
 
         // Fixed top Y in plot coords for the active plot labels
         const int topPixel = customPlot->axisRect()->top();
-        const double fixedTopY = customPlot->yAxis->pixelToCoord(topPixel + 5);
+        const double fixedTopYValues   = customPlot->yAxis->pixelToCoord(topPixel + 2);
+        const double fixedTopYDistance = customPlot->yAxis->pixelToCoord(topPixel + 7);
 
         for (QCustomPlot* plot : customPlots) {
             const double leftX = selectionRect->topLeft->coords().x();
@@ -864,18 +914,18 @@ void KinematicVisualizer::onMouseDrag() {
             if (plot == customPlot) {
                 if (globalSelectionLeftLabels.contains(plot)) {
                     auto *leftLabel = globalSelectionLeftLabels.value(plot);
-                    leftLabel->position->setCoords(leftX, plot->yAxis->range().upper);
+                    leftLabel->position->setCoords(leftX, fixedTopYValues);
                     leftLabel->setText(QString::number(leftX, 'f', 3));
                 }
                 if (globalSelectionRightLabels.contains(plot)) {
                     auto *rightLabel = globalSelectionRightLabels.value(plot);
-                    rightLabel->position->setCoords(newRightX, plot->yAxis->range().upper);
+                    rightLabel->position->setCoords(newRightX, fixedTopYValues);
                     rightLabel->setText(QString::number(newRightX, 'f', 3));
                 }
                 if (globalSelectionDistanceLabels.contains(plot)) {
                     auto *distLabel = globalSelectionDistanceLabels.value(plot);
                     const double centerX = (leftX + newRightX) / 2.0;
-                    distLabel->position->setCoords(centerX, fixedTopY);
+                    distLabel->position->setCoords(centerX, fixedTopYDistance);
                     const double distance = std::fabs(newRightX - leftX);
                     distLabel->setText(QString::number(distance, 'f', 3));
 
@@ -941,8 +991,8 @@ void KinematicVisualizer::setupCustomPlot() {
     customPlot->yAxis->setTicks(false);
     customPlot->yAxis->setTickLabels(false);
 
-    customPlot->axisRect()->setMargins(QMargins(0, 0, 0, 0));
-    customPlot->axisRect()->setMinimumMargins(QMargins(0, 0, 0, 0));
+    customPlot->axisRect()->setAutoMargins(QCP::msTop | QCP::msRight | QCP::msBottom);
+    customPlot->axisRect()->setMinimumMargins(QMargins(36, 0, 0, 0));
 
     // Performance tweak
     customPlot->setNotAntialiasedElements(QCP::aeAll);
