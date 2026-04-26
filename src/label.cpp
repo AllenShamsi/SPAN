@@ -101,6 +101,18 @@ inline void safeRemove(QCustomPlot* plot, QCPAbstractItem* it) {
 }
 } // namespace
 
+void Label::setVelocityThresholdFraction(double value)
+{
+    if (std::isfinite(value) && value > 0.0 && value < 1.0)
+        m_velocityThresholdFraction = value;
+}
+
+void Label::setReopeningDeadbandFraction(double value)
+{
+    if (std::isfinite(value) && value >= 0.0 && value < 1.0)
+        m_reopeningDeadbandFraction = value;
+}
+
 
 int Label::countTrailingLowerCase(const QString &str)
 {
@@ -368,7 +380,7 @@ void Label::findPrecedingVelocityExtremumFromVector(Label::landmarks &lm,
         return sign * velocityData[idx];
     };
     double peakMag  = sign * y_PVEL1;   // > 0
-    double threshold = 0.2 * peakMag;   // 20% of peak closing speed
+    double threshold = m_velocityThresholdFraction * peakMag;   // 20% of peak closing speed is default
 
     // 5) GONS: first time *before* PVEL1 where v crosses +threshold upward
     //    (acceleration toward target).
@@ -459,9 +471,31 @@ void Label::findFollowingVelocityExtremumFromVector(Label::landmarks &lm,
                       : ExtremumType::LocalMaximum;
     }
 
-    // 3) Scan right from nearestIndex to find PVEL2 (peak opening velocity).
+    // 3) Find the main reopening peak (PVEL2), not just the first tiny extremum.
+    //    Strategy:
+    //    - estimate a small deadband around zero from the future opening-side signal
+    //    - wait until velocity clearly leaves that deadband in the reopening direction
+    //    - within that opening excursion, keep the strongest local extremum
     double y_PVEL2   = std::numeric_limits<double>::quiet_NaN();
     int    pvelIndex = -1;
+
+    double maxAbsFuture = 0.0;
+    for (int i = nearestIndex + 1; i < static_cast<int>(velocityData.size()); ++i) {
+        if (std::isfinite(velocityData[i])) {
+            maxAbsFuture = std::max(maxAbsFuture, std::fabs(velocityData[i]));
+        }
+    }
+
+    if (maxAbsFuture <= 0.0)
+        return;
+
+    // Deadband to ignore tiny post-MaxC wiggles near zero.
+    // 5% is the default.
+    const double deadband = m_reopeningDeadbandFraction * maxAbsFuture;
+
+    bool inOpeningExcursion = false;
+    bool foundCandidate     = false;
+
     for (int i = nearestIndex + 1; i < static_cast<int>(velocityData.size()) - 1; ++i) {
         if (i < 1 || i + 1 >= static_cast<int>(velocityData.size()))
             continue;
@@ -470,27 +504,59 @@ void Label::findFollowingVelocityExtremumFromVector(Label::landmarks &lm,
         double currVal = velocityData[i];
         double nextVal = velocityData[i + 1];
 
-        if (!std::isfinite(currVal))
+        if (!std::isfinite(prevVal) || !std::isfinite(currVal) || !std::isfinite(nextVal))
             continue;
+
+        // Wait until the signal clearly leaves the zero region
+        // in the reopening direction.
+        if (!inOpeningExcursion) {
+            if (desired == ExtremumType::LocalMaximum) {
+                if (currVal > deadband)
+                    inOpeningExcursion = true;
+                else
+                    continue;
+            } else { // LocalMinimum
+                if (currVal < -deadband)
+                    inOpeningExcursion = true;
+                else
+                    continue;
+            }
+        }
 
         bool isLocalMaximum = (currVal >= prevVal && currVal > nextVal);
         bool isLocalMinimum = (currVal <= prevVal && currVal < nextVal);
 
         if (desired == ExtremumType::LocalMaximum && isLocalMaximum) {
-            pvelIndex = i;
-            y_PVEL2   = currVal;
-            lm.PVEL2  = i / sr;
-            break;
+            if (!foundCandidate || currVal > y_PVEL2) {
+                foundCandidate = true;
+                pvelIndex = i;
+                y_PVEL2   = currVal;
+            }
         }
+
         if (desired == ExtremumType::LocalMinimum && isLocalMinimum) {
-            pvelIndex = i;
-            y_PVEL2   = currVal;
-            lm.PVEL2  = i / sr;
-            break;
+            if (!foundCandidate || currVal < y_PVEL2) {
+                foundCandidate = true;
+                pvelIndex = i;
+                y_PVEL2   = currVal;
+            }
+        }
+
+        // Once we've found at least one reopening candidate, stop when the signal
+        // returns to the deadband region. That keeps us within the same opening excursion
+        // and avoids drifting into later unrelated movements.
+        if (foundCandidate) {
+            if (desired == ExtremumType::LocalMaximum && currVal <= deadband)
+                break;
+            if (desired == ExtremumType::LocalMinimum && currVal >= -deadband)
+                break;
         }
     }
+
     if (pvelIndex == -1 || !std::isfinite(y_PVEL2))
         return;
+
+    lm.PVEL2 = pvelIndex / sr;
 
     // 4) Sign-normalized velocity: "away from target" is always positive.
     //    Threshold is 20% of |PVEL2|.
@@ -499,7 +565,7 @@ void Label::findFollowingVelocityExtremumFromVector(Label::landmarks &lm,
         return sign * velocityData[idx];
     };
     double peakMag  = sign * y_PVEL2;   // > 0
-    double threshold = 0.2 * peakMag;   // 20% of peak opening speed
+    double threshold = m_velocityThresholdFraction * peakMag;   // default is 20% of peak opening speed
 
     const int N = static_cast<int>(velocityData.size());
 
@@ -617,62 +683,79 @@ void Label::placeLabelAt(double x, QString labelName)
 
 void Label::removeLabelAt(double x, const QString &legendName)
 {
-    if (!m_plot || m_labelLines.isEmpty()) return;
+    if (!m_plot || m_labelLines.isEmpty())
+        return;
 
     // Local helpers (idempotent removal)
-    auto plotHasItem = [this](QCPAbstractItem* it)->bool {
-        if (!m_plot || !it) return false;
-        for (int i = 0, n = m_plot->itemCount(); i < n; ++i)
-            if (m_plot->item(i) == it) return true;
+    auto plotHasItem = [this](QCPAbstractItem *it) -> bool {
+        if (!m_plot || !it)
+            return false;
+        for (int i = 0, n = m_plot->itemCount(); i < n; ++i) {
+            if (m_plot->item(i) == it)
+                return true;
+        }
         return false;
     };
-    auto safeRemove = [&](QCPAbstractItem* it){
-        if (plotHasItem(it)) m_plot->removeItem(it);
+
+    auto safeRemove = [&](QCPAbstractItem *it) {
+        if (plotHasItem(it))
+            m_plot->removeItem(it);
     };
 
-    // Find closest line to x
-    auto closestLineIt = std::min_element(
-        m_labelLines.begin(), m_labelLines.end(),
-        [x](QCPItemLine *l1, QCPItemLine *l2){
-            return std::fabs(l1->start->coords().x() - x)
-            < std::fabs(l2->start->coords().x() - x);
-        });
-    if (closestLineIt == m_labelLines.end()) return;
+    static const double EPS = 1e-3;
 
-    QCPItemLine *line = *closestLineIt;
+    // Find the exact matching line for this channel + offset
+    auto matchIt = std::find_if(
+        m_labelLines.begin(), m_labelLines.end(),
+        [&](QCPItemLine *line) {
+            if (!line)
+                return false;
+
+            const QString lineLegend = m_labelLineLegendMap.value(line);
+            const double  lineX      = line->start->coords().x();
+
+            return (lineLegend == legendName && std::fabs(lineX - x) < EPS);
+        });
+
+    if (matchIt == m_labelLines.end())
+        return;
+
+    QCPItemLine *line = *matchIt;
     const double lx   = line->start->coords().x();
 
-    if (m_labelLineLegendMap.value(line) == legendName)
-    {
-        // Clear any selection/drag state tied to this line
-        if (m_currentlySelectedLine == line) m_currentlySelectedLine = nullptr;
-        if (m_draggedLine == line) { m_isDragging = false; m_draggedHandle = nullptr; m_draggedLine = nullptr; }
+    // Clear any selection/drag state tied to this line
+    if (m_currentlySelectedLine == line)
+        m_currentlySelectedLine = nullptr;
 
-        // Remove top-handle(s) tied to this line
-        for (auto it = m_labelHandleMapText.begin(); it != m_labelHandleMapText.end(); ) {
-            if (it.value() == line) {
-                safeRemove(it.key());
-                it = m_labelHandleMapText.erase(it);
-            } else {
-                ++it;
-            }
-        }
-
-        // Remove bottom text mapped to this line
-        if (QCPItemText* bottom = m_lineToBottomText.take(line)) {
-            safeRemove(bottom);
-            m_labelTexts.removeOne(bottom);
-        }
-
-        // Clean maps and remove the line
-        m_labelLineNameMap.remove(line);
-        m_labelLineLegendMap.remove(line);
-        safeRemove(line);
-        m_labelLines.erase(closestLineIt);
-
-        // Notify model
-        emit landmarkRemoved(lx);
+    if (m_draggedLine == line) {
+        m_isDragging = false;
+        m_draggedHandle = nullptr;
+        m_draggedLine = nullptr;
     }
+
+    // Remove top-handle(s) tied to this line
+    for (auto it = m_labelHandleMapText.begin(); it != m_labelHandleMapText.end(); ) {
+        if (it.value() == line) {
+            safeRemove(it.key());
+            it = m_labelHandleMapText.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    // Remove bottom text mapped to this line
+    if (QCPItemText *bottom = m_lineToBottomText.take(line)) {
+        safeRemove(bottom);
+        m_labelTexts.removeOne(bottom);
+    }
+
+    // Clean maps and remove the line
+    m_labelLineNameMap.remove(line);
+    m_labelLineLegendMap.remove(line);
+    safeRemove(line);
+    m_labelLines.erase(matchIt);
+
+    emit landmarkRemoved(lx);
 
     m_plot->replot();
 }
@@ -935,4 +1018,38 @@ void Label::updateLabelName(double x, const QString &actualName)
             return;
         }
     }
+}
+
+void Label::refreshGeometryForCurrentAxes()
+{
+    if (!m_plot)
+        return;
+
+    const double yBottom = m_plot->yAxis->range().lower;
+    const double yTop    = m_plot->yAxis->range().upper;
+
+    for (QCPItemLine *line : m_labelLines) {
+        if (!line)
+            continue;
+
+        const double x = line->start->coords().x();
+
+        // Stretch the line to the current visible Y range
+        line->start->setCoords(x, yBottom);
+        line->end->setCoords(x, yTop);
+
+        // Reposition the bottom numeric text
+        if (QCPItemText *bottomText = m_lineToBottomText.value(line, nullptr)) {
+            bottomText->position->setCoords(x, yBottom);
+        }
+
+        // Reposition the top handle
+        for (auto it = m_labelHandleMapText.begin(); it != m_labelHandleMapText.end(); ++it) {
+            if (it.value() == line && it.key()) {
+                it.key()->position->setCoords(x, yTop);
+            }
+        }
+    }
+
+    m_plot->replot(QCustomPlot::rpQueuedReplot);
 }
