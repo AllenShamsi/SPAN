@@ -111,7 +111,6 @@ mainWindow::mainWindow(QWidget *parent)
     // Configs
     addAct({QS(Qt::CTRL | Qt::SHIFT | Qt::Key_Up)},    [this]{ moveUpButtonClicked(); });
     addAct({QS(Qt::CTRL | Qt::SHIFT | Qt::Key_Down)},  [this]{ moveDownButtonClicked(); });
-    addAct({QS(Qt::CTRL | Qt::Key_Delete)},            [this]{ removeConfigButtonClicked(); });
     addAct({QS(Qt::CTRL | Qt::SHIFT | Qt::Key_I)},     [this]{ invertButtonClicked(); });
     addAct({QS(Qt::CTRL | Qt::SHIFT | Qt::Key_A)},     [this]{ applyConfigToAllButtonClicked(); });
 
@@ -131,6 +130,12 @@ mainWindow::mainWindow(QWidget *parent)
         connect(scDel, &QShortcut::activated, this, [this]{ removeSelectedLandmark(); });
     }
 
+    // Configured channels list: Delete = remove selected configured channel
+    {
+        auto scDel = new QShortcut(QKeySequence(Qt::Key_Delete), ui->configuredChannelsListView);
+        scDel->setContext(Qt::WidgetWithChildrenShortcut);
+        connect(scDel, &QShortcut::activated, this, [this]{ removeConfigButtonClicked(); });
+    }
 
     // ---------- File Info ----------------
 
@@ -240,7 +245,7 @@ mainWindow::mainWindow(QWidget *parent)
     connect(ui->viewButton,             &QPushButton::clicked, this, &mainWindow::viewSpanFile);
     connect(ui->placeLabelsButton,      &QPushButton::clicked, this, &mainWindow::placeLabelsButtonClicked);
     connect(ui->filesListView,          &QAbstractItemView::doubleClicked,
-                                                               this, &mainWindow::onSpanFileDoubleClicked);
+            this, &mainWindow::onSpanFileDoubleClicked);
     connect(ui->addSpanFilesButton,     &QPushButton::clicked, this, &mainWindow::addSpanButtonClicked);
     connect(ui->removeSpanFilesButton,  &QPushButton::clicked, this, &mainWindow::removeSelectedSpanFiles);
     connect(ui->invertButton,           &QPushButton::clicked, this, &mainWindow::invertButtonClicked);
@@ -4216,7 +4221,7 @@ void mainWindow::setupMenus()
     QMenu *viewMenu = mb->addMenu(tr("&View"));
 
     m_selectRangeAction = addMenuAction(viewMenu, tr("&Select Range"),
-                                        QKeySequence(Qt::Key_S),
+                                        QKeySequence(),
                                         &mainWindow::on_selectButton_clicked);
 
     m_zoomInAction = addMenuAction(viewMenu, tr("Zoom &In"),
@@ -4506,21 +4511,20 @@ QString mainWindow::buildHelpHtml() const
 
         <h3>11. Useful shortcuts</h3>
         <ul>
-          <li><code>⌘ O</code>: Open files</li>
-          <li><code>⌘ Shift P</code>: Open preprocessing window</li>
-          <li><code>⌘ I</code>: File info</li>
-          <li><code>Enter</code>: View selected file</li>
-          <li><code>⌘ L</code>: Place labels</li>
+          <li><code>Ctrl O</code>: Open files</li>
+          <li><code>Ctrl Shift P</code>: Open preprocessing window</li>
+          <li><code>Ctrl I</code>: File info</li>
+          <li><code>Ctrl L</code>: Place labels</li>
           <li><code>Space</code>: Play / pause</li>
           <li><code>Shift Space</code>: Play selection</li>
           <li><code>Esc</code>: Stop playback</li>
           <li><code>S</code>: Select range</li>
-          <li><code>⌘ +</code>: Zoom in</li>
-          <li><code>⌘ -</code>: Zoom out</li>
-          <li><code>⌘ 0</code>: Reset view</li>
-          <li><code>⌘ E</code>: Export CSV</li>
-          <li><code>⌘ Shift L</code>: Clear all landmarks</li>
-          <li><code>⌘ ?</code>: Open help</li>
+          <li><code>Ctrl +</code>: Zoom in</li>
+          <li><code>Ctrl -</code>: Zoom out</li>
+          <li><code>Ctrl 0</code>: Reset view</li>
+          <li><code>Ctrl E</code>: Export CSV</li>
+          <li><code>Ctrl Shift L</code>: Clear all landmarks</li>
+          <li><code>F1</code>: Open help</li>
         </ul>
 
         <h3>12. Support</h3>
@@ -4560,7 +4564,7 @@ void mainWindow::setupTooltips()
     };
 
     // Files
-    tt(ui->addSpanFilesButton, "⌘ O");
+    tt(ui->addSpanFilesButton, "Ctrl O");
     tt(ui->viewButton, "Display the current file.");
     tt(ui->preprocessButton, "Create .span files.");
     tt(ui->infoButton, "Show info for the current file.");
@@ -4569,9 +4573,9 @@ void mainWindow::setupTooltips()
     tt(ui->playSoundButton, "Space");
     tt(ui->playSelectionButton, "Shift Space");
     tt(ui->stopSoundButton, "Esc");
-    tt(ui->zoomInButton, "⌘ +");
-    tt(ui->zoomOutButton, "⌘ -");
-    tt(ui->resetButton, "⌘ 0");
+    tt(ui->zoomInButton, "Ctrl +");
+    tt(ui->zoomOutButton, "Ctrl -");
+    tt(ui->resetButton, "Ctrl 0");
     tt(ui->selectButton, "S");
 
     // Config tab
@@ -4600,8 +4604,8 @@ void mainWindow::setupTooltips()
     // Landmarking
     tt(ui->placeLabelsButton, "Place selected landmark labels on the current plots.");
     tt(ui->removeLandmarkButton, "Remove the selected landmark.");
-    tt(ui->clearAllLandmarkButton, "⌘ Shift L");
-    tt(ui->getCSVFileButton, "⌘ E");
+    tt(ui->clearAllLandmarkButton, "Ctrl Shift L");
+    tt(ui->getCSVFileButton, "Ctrl E");
 
     // Templates / DTW
     if (ui->templateComboBox)
