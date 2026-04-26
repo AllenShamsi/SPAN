@@ -40,6 +40,10 @@ public:
 
     void moveHandleBy(QCPItemText *handle, double deltaX);
     void updateLabelName(double x, const QString &actualName);
+    void refreshGeometryForCurrentAxes();
+
+    void setVelocityThresholdFraction(double value);
+    void setReopeningDeadbandFraction(double value);
 
     QCustomPlot* getPlot() const { return m_plot; }
 
@@ -113,4 +117,7 @@ private:
     bool          m_isDragging{false};
     double        m_initialClickX{0.0};
     double        m_initialLineX{0.0};
+
+    double m_velocityThresholdFraction = 0.20;
+    double m_reopeningDeadbandFraction = 0.05;
 };
