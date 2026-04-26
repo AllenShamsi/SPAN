@@ -940,6 +940,7 @@
           </property>
           <property name="font">
            <font>
+            <family>.AppleSystemUIFont</family>
             <bold>true</bold>
            </font>
           </property>
@@ -957,6 +958,7 @@
            </property>
            <property name="font">
             <font>
+             <family>.AppleSystemUIFont</family>
              <bold>false</bold>
             </font>
            </property>
@@ -972,6 +974,7 @@
            </property>
            <property name="font">
             <font>
+             <family>.AppleSystemUIFont</family>
              <bold>false</bold>
             </font>
            </property>
@@ -996,6 +999,7 @@
            </property>
            <property name="font">
             <font>
+             <family>.AppleSystemUIFont</family>
              <bold>false</bold>
             </font>
            </property>
@@ -1017,6 +1021,7 @@
            </property>
            <property name="font">
             <font>
+             <family>.AppleSystemUIFont</family>
              <bold>false</bold>
             </font>
            </property>
@@ -1035,6 +1040,7 @@
            </property>
            <property name="font">
             <font>
+             <family>.AppleSystemUIFont</family>
              <bold>false</bold>
             </font>
            </property>
@@ -1065,6 +1071,7 @@
               </property>
               <property name="font">
                <font>
+                <family>.AppleSystemUIFont</family>
                 <bold>false</bold>
                </font>
               </property>
@@ -1083,6 +1090,7 @@
               </property>
               <property name="font">
                <font>
+                <family>.AppleSystemUIFont</family>
                 <bold>false</bold>
                </font>
               </property>
@@ -1116,6 +1124,7 @@
               </property>
               <property name="font">
                <font>
+                <family>.AppleSystemUIFont</family>
                 <bold>false</bold>
                </font>
               </property>
@@ -1134,6 +1143,7 @@
               </property>
               <property name="font">
                <font>
+                <family>.AppleSystemUIFont</family>
                 <bold>false</bold>
                </font>
               </property>
@@ -1152,6 +1162,7 @@
               </property>
               <property name="font">
                <font>
+                <family>.AppleSystemUIFont</family>
                 <bold>false</bold>
                </font>
               </property>
@@ -1354,6 +1365,7 @@
           </property>
           <property name="font">
            <font>
+            <family>.AppleSystemUIFont</family>
             <bold>true</bold>
            </font>
           </property>
@@ -1377,6 +1389,7 @@
            </property>
            <property name="font">
             <font>
+             <family>.AppleSystemUIFont</family>
              <bold>false</bold>
             </font>
            </property>
@@ -1392,6 +1405,7 @@
            </property>
            <property name="font">
             <font>
+             <family>.AppleSystemUIFont</family>
              <bold>false</bold>
             </font>
            </property>
@@ -1410,6 +1424,7 @@
            </property>
            <property name="font">
             <font>
+             <family>.AppleSystemUIFont</family>
              <bold>true</bold>
             </font>
            </property>
@@ -1428,6 +1443,7 @@
            </property>
            <property name="font">
             <font>
+             <family>.AppleSystemUIFont</family>
              <bold>false</bold>
             </font>
            </property>
@@ -1446,6 +1462,7 @@
            </property>
            <property name="font">
             <font>
+             <family>.AppleSystemUIFont</family>
              <bold>false</bold>
             </font>
            </property>
@@ -1464,6 +1481,7 @@
            </property>
            <property name="font">
             <font>
+             <family>.AppleSystemUIFont</family>
              <bold>true</bold>
             </font>
            </property>
@@ -1482,6 +1500,7 @@
            </property>
            <property name="font">
             <font>
+             <family>.AppleSystemUIFont</family>
              <bold>false</bold>
             </font>
            </property>
@@ -1500,6 +1519,7 @@
            </property>
            <property name="font">
             <font>
+             <family>.AppleSystemUIFont</family>
              <bold>false</bold>
             </font>
            </property>
@@ -1518,6 +1538,7 @@
            </property>
            <property name="font">
             <font>
+             <family>.AppleSystemUIFont</family>
              <bold>false</bold>
             </font>
            </property>
@@ -1551,6 +1572,7 @@
               </property>
               <property name="font">
                <font>
+                <family>.AppleSystemUIFont</family>
                 <bold>false</bold>
                 <underline>false</underline>
                 <strikeout>false</strikeout>
@@ -1581,6 +1603,7 @@
               </property>
               <property name="font">
                <font>
+                <family>.AppleSystemUIFont</family>
                 <bold>false</bold>
                </font>
               </property>
@@ -1603,6 +1626,7 @@
           </property>
           <property name="font">
            <font>
+            <family>.AppleSystemUIFont</family>
             <bold>true</bold>
            </font>
           </property>
@@ -1632,6 +1656,7 @@
               </property>
               <property name="font">
                <font>
+                <family>.AppleSystemUIFont</family>
                 <bold>false</bold>
                </font>
               </property>
@@ -1650,6 +1675,7 @@
               </property>
               <property name="font">
                <font>
+                <family>.AppleSystemUIFont</family>
                 <bold>false</bold>
                </font>
               </property>
@@ -1683,6 +1709,7 @@
               </property>
               <property name="font">
                <font>
+                <family>.AppleSystemUIFont</family>
                 <bold>false</bold>
                </font>
               </property>
@@ -1701,6 +1728,7 @@
               </property>
               <property name="font">
                <font>
+                <family>.AppleSystemUIFont</family>
                 <bold>false</bold>
                </font>
               </property>
@@ -1719,6 +1747,7 @@
               </property>
               <property name="font">
                <font>
+                <family>.AppleSystemUIFont</family>
                 <bold>false</bold>
                </font>
               </property>
@@ -1737,6 +1766,7 @@
               </property>
               <property name="font">
                <font>
+                <family>.AppleSystemUIFont</family>
                 <bold>false</bold>
                </font>
               </property>
@@ -1765,6 +1795,7 @@
           </property>
           <property name="font">
            <font>
+            <family>.AppleSystemUIFont</family>
             <bold>false</bold>
            </font>
           </property>
@@ -1780,6 +1811,7 @@
           </property>
           <property name="font">
            <font>
+            <family>.AppleSystemUIFont</family>
             <bold>true</bold>
            </font>
           </property>
@@ -1817,16 +1849,17 @@
             <x>10</x>
             <y>10</y>
             <width>271</width>
-            <height>161</height>
+            <height>151</height>
            </rect>
           </property>
           <property name="font">
            <font>
+            <family>.AppleSystemUIFont</family>
             <bold>true</bold>
            </font>
           </property>
           <property name="title">
-           <string>Audio</string>
+           <string>Audio Spectrogram</string>
           </property>
           <widget class="QLabel" name="label">
            <property name="geometry">
@@ -1839,6 +1872,7 @@
            </property>
            <property name="font">
             <font>
+             <family>.AppleSystemUIFont</family>
              <bold>false</bold>
             </font>
            </property>
@@ -1857,6 +1891,7 @@
            </property>
            <property name="font">
             <font>
+             <family>.AppleSystemUIFont</family>
              <bold>false</bold>
             </font>
            </property>
@@ -1875,6 +1910,7 @@
            </property>
            <property name="font">
             <font>
+             <family>.AppleSystemUIFont</family>
              <bold>false</bold>
             </font>
            </property>
@@ -1896,6 +1932,7 @@
              <widget class="QPushButton" name="specDefaultsButton">
               <property name="font">
                <font>
+                <family>.AppleSystemUIFont</family>
                 <bold>false</bold>
                </font>
               </property>
@@ -1908,6 +1945,7 @@
              <widget class="QPushButton" name="specApplyButton">
               <property name="font">
                <font>
+                <family>.AppleSystemUIFont</family>
                 <bold>false</bold>
                </font>
               </property>
@@ -1932,6 +1970,7 @@
              <widget class="QDoubleSpinBox" name="specViewMaxHzSpinBox">
               <property name="font">
                <font>
+                <family>.AppleSystemUIFont</family>
                 <bold>false</bold>
                </font>
               </property>
@@ -1950,6 +1989,7 @@
              <widget class="QDoubleSpinBox" name="specWindowMsSpinBox">
               <property name="font">
                <font>
+                <family>.AppleSystemUIFont</family>
                 <bold>false</bold>
                </font>
               </property>
@@ -1971,6 +2011,7 @@
              <widget class="QDoubleSpinBox" name="specDynamicRangeSpinBox">
               <property name="font">
                <font>
+                <family>.AppleSystemUIFont</family>
                 <bold>false</bold>
                </font>
               </property>
@@ -2009,6 +2050,154 @@
             </layout>
            </item>
           </layout>
+         </widget>
+         <widget class="QGroupBox" name="groupBox_8">
+          <property name="geometry">
+           <rect>
+            <x>10</x>
+            <y>160</y>
+            <width>271</width>
+            <height>121</height>
+           </rect>
+          </property>
+          <property name="font">
+           <font>
+            <family>.AppleSystemUIFont</family>
+            <bold>true</bold>
+           </font>
+          </property>
+          <property name="title">
+           <string>Landmark Detection</string>
+          </property>
+          <widget class="QLabel" name="label_6">
+           <property name="geometry">
+            <rect>
+             <x>10</x>
+             <y>30</y>
+             <width>121</width>
+             <height>16</height>
+            </rect>
+           </property>
+           <property name="font">
+            <font>
+             <family>.AppleSystemUIFont</family>
+             <bold>false</bold>
+            </font>
+           </property>
+           <property name="text">
+            <string>Landmark threshold</string>
+           </property>
+          </widget>
+          <widget class="QWidget" name="verticalLayoutWidget">
+           <property name="geometry">
+            <rect>
+             <x>140</x>
+             <y>30</y>
+             <width>71</width>
+             <height>51</height>
+            </rect>
+           </property>
+           <layout class="QVBoxLayout" name="verticalLayout_6">
+            <item>
+             <widget class="QDoubleSpinBox" name="landmarkThresholdSpinBox">
+              <property name="font">
+               <font>
+                <family>.AppleSystemUIFont</family>
+                <bold>false</bold>
+               </font>
+              </property>
+              <property name="minimum">
+               <double>0.010000000000000</double>
+              </property>
+              <property name="maximum">
+               <double>0.500000000000000</double>
+              </property>
+              <property name="singleStep">
+               <double>0.010000000000000</double>
+              </property>
+              <property name="value">
+               <double>0.200000000000000</double>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QDoubleSpinBox" name="reopeningDeadbandSpinBox">
+              <property name="font">
+               <font>
+                <family>.AppleSystemUIFont</family>
+                <bold>false</bold>
+               </font>
+              </property>
+              <property name="maximum">
+               <double>0.200000000000000</double>
+              </property>
+              <property name="singleStep">
+               <double>0.010000000000000</double>
+              </property>
+              <property name="value">
+               <double>0.050000000000000</double>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+          <widget class="QLabel" name="label_7">
+           <property name="geometry">
+            <rect>
+             <x>10</x>
+             <y>60</y>
+             <width>131</width>
+             <height>16</height>
+            </rect>
+           </property>
+           <property name="font">
+            <font>
+             <family>.AppleSystemUIFont</family>
+             <bold>false</bold>
+            </font>
+           </property>
+           <property name="text">
+            <string>Reopening deadband</string>
+           </property>
+          </widget>
+          <widget class="QWidget" name="horizontalLayoutWidget_5">
+           <property name="geometry">
+            <rect>
+             <x>10</x>
+             <y>80</y>
+             <width>251</width>
+             <height>32</height>
+            </rect>
+           </property>
+           <layout class="QHBoxLayout" name="horizontalLayout_7">
+            <item>
+             <widget class="QPushButton" name="landmarkDefaultsButton">
+              <property name="font">
+               <font>
+                <family>.AppleSystemUIFont</family>
+                <bold>false</bold>
+               </font>
+              </property>
+              <property name="text">
+               <string>Reset</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QPushButton" name="landmarkApplyButton">
+              <property name="font">
+               <font>
+                <family>.AppleSystemUIFont</family>
+                <bold>false</bold>
+               </font>
+              </property>
+              <property name="text">
+               <string>Apply</string>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </widget>
          </widget>
         </widget>
        </widget>
@@ -2148,6 +2337,9 @@
            <layout class="QHBoxLayout" name="horizontalLayout_4">
             <property name="spacing">
              <number>0</number>
+            </property>
+            <property name="sizeConstraint">
+             <enum>QLayout::SizeConstraint::SetNoConstraint</enum>
             </property>
             <item>
              <widget class="QPushButton" name="zoomInButton">
