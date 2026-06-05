@@ -313,6 +313,9 @@ private:
     QAction *m_contactAction = nullptr;
     QAction *m_aboutAction = nullptr;
 
+    bool m_handlingViewRangeChange = false;
+    QTimer *m_cursorOverlayResumeTimer = nullptr;
+
 };
 
 #endif // MAINWINDOW_H
