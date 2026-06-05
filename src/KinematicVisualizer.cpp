@@ -478,7 +478,15 @@ void KinematicVisualizer::visualizeSpectrogram(
 }
 
 
+void KinematicVisualizer::setCursorOverlaySuspended(bool suspended)
+{
+    m_suspendCursorOverlay = suspended;
 
+    if (suspended) {
+        hideAllVerticalLines();
+        hideHorizontalCursor();
+    }
+}
 
 
 void KinematicVisualizer::setTrackedParameter(const QString &parameter) {
@@ -632,7 +640,14 @@ void KinematicVisualizer::setupCursorItems(QCustomPlot *plot) {
     }
 }
 
-void KinematicVisualizer::updateCursorItems(QCustomPlot *plot) {
+void KinematicVisualizer::updateCursorItems(QCustomPlot *plot)
+{
+    if (m_suspendCursorOverlay) {
+        hideAllVerticalLines();
+        hideHorizontalCursor();
+        return;
+    }
+
     const double x = plot->xAxis->pixelToCoord(cursorPos.x());
     double y;
     QString usedAxis;   // Which axis we actually tracked (may be empty)
@@ -650,10 +665,6 @@ void KinematicVisualizer::updateCursorItems(QCustomPlot *plot) {
         }
     }
 
-    // Keep vertical lines visible while the cursor is inside a plot.
-    // We update their X position below for all plots, so there is no need
-    // to hide and re-show them on every mouse move.
-
     // Main-plot horizontal cursor + text
     if (plot == customPlot) {
         double adjustedY = y;
@@ -661,8 +672,7 @@ void KinematicVisualizer::updateCursorItems(QCustomPlot *plot) {
         if (usedAxis == "X")      adjustedY += signalOffsets.value("X", 0.0);
         else if (usedAxis == "Y") adjustedY += signalOffsets.value("Y", 0.0);
         else if (usedAxis == "Z") adjustedY += signalOffsets.value("Z", 0.0);
-        // If usedAxis is empty → Auto but multi-dim or user-picked axis without data:
-        // we’re just using raw Y; no offset applied.
+        // If usedAxis is empty -> raw mouse Y, so no offset is applied.
 
         if (cursorPos.y() >= 0 && cursorPos.y() <= plot->height()) {
             hLine->start->setCoords(plot->xAxis->range().lower, adjustedY);
@@ -673,7 +683,8 @@ void KinematicVisualizer::updateCursorItems(QCustomPlot *plot) {
         }
 
         // Update text
-        const QString coordStr = QString("X: %1\nY: %2").arg(x, 0, 'f', 3).arg(y, 0, 'f', 3);
+        const QString coordStr =
+            QString("X: %1\nY: %2").arg(x, 0, 'f', 6).arg(y, 0, 'f', 6);
         coordText->setText(coordStr);
 
         const QFontMetrics fm(coordText->font());
@@ -688,16 +699,12 @@ void KinematicVisualizer::updateCursorItems(QCustomPlot *plot) {
         const int leftX = cursorPos.x() + 20;
         const int topY  = cursorPos.y();
 
-        // Frame: [leftX, topY - padding] → [leftX + frameWidth, topY + frameHeight - padding]
-        coordFrame->topLeft->setPixelPosition(
-            QPoint(leftX, topY - padding));
+        coordFrame->topLeft->setPixelPosition(QPoint(leftX, topY - padding));
         coordFrame->bottomRight->setPixelPosition(
             QPoint(leftX + frameWidth, topY + frameHeight - padding));
         coordFrame->setVisible(true);
 
-        // Text top-left goes inside the frame with padding
-        coordText->position->setPixelPosition(
-            QPoint(leftX + padding, topY));
+        coordText->position->setPixelPosition(QPoint(leftX + padding, topY));
         coordText->setVisible(true);
 
         customPlot->replot(QCustomPlot::rpQueuedReplot);
@@ -927,7 +934,7 @@ void KinematicVisualizer::onMouseDrag() {
                     const double centerX = (leftX + newRightX) / 2.0;
                     distLabel->position->setCoords(centerX, fixedTopYDistance);
                     const double distance = std::fabs(newRightX - leftX);
-                    distLabel->setText(QString::number(distance, 'f', 3));
+                    distLabel->setText(QString::number(distance, 'f', 6));
 
                     // Hide if label text won't fit between boundaries
                     const QFontMetrics fm(distLabel->font());
