@@ -304,126 +304,175 @@ void Label::findPrecedingVelocityExtremumFromVector(Label::landmarks &lm,
     if (!std::isfinite(xCenterSec))
         return;
 
-    // Need at least 3 samples to detect a local extremum.
-    if (velocityData.size() < 3)
+    if (velocityData.size() < 3 || sr <= 0.0)
         return;
 
-    // 1) Find the sample index closest to xCenterSec.
+    const int N = static_cast<int>(velocityData.size());
+
+    // 1) Find the sample index closest to MaxC.
     int nearestIndex = -1;
-    double minDist   = std::numeric_limits<double>::max();
-    for (int i = 0; i < static_cast<int>(velocityData.size()); ++i) {
-        double tSec = i / sr;
-        double dist = std::fabs(tSec - xCenterSec);
+    double minDist = std::numeric_limits<double>::max();
+
+    for (int i = 0; i < N; ++i) {
+        const double tSec = i / sr;
+        const double dist = std::fabs(tSec - xCenterSec);
         if (dist < minDist) {
             minDist = dist;
             nearestIndex = i;
         }
     }
-    if (nearestIndex < 1)
+
+    if (nearestIndex < 2)
         return;
 
-    // 2) Determine desired extremum type (closing peak) near MaxC.
-    enum class ExtremumType { LocalMaximum, LocalMinimum };
-    ExtremumType desired;
-    if (velocityData[nearestIndex] > velocityData[nearestIndex - 1])
-        desired = ExtremumType::LocalMinimum;
-    else if (velocityData[nearestIndex] < velocityData[nearestIndex - 1])
-        desired = ExtremumType::LocalMaximum;
-    else {
-        int j = nearestIndex;
-        while (j > 0 && velocityData[j] == velocityData[j - 1])
-            --j;
-        if (j == 0)
-            return;
-        desired = (velocityData[nearestIndex] > velocityData[j - 1])
-                      ? ExtremumType::LocalMinimum
-                      : ExtremumType::LocalMaximum;
-    }
+    // Search within a reasonable window before MaxC.
+    // This avoids letting a distant unrelated movement define the deadband.
+    const int searchWindowSamples = static_cast<int>(std::round(1.0 * sr)); // 1 second
+    const int searchStart = std::max(1, nearestIndex - searchWindowSamples);
 
-    // 3) Scan left from nearestIndex to find PVEL1 (peak closing velocity).
-    double y_PVEL1   = std::numeric_limits<double>::quiet_NaN();
-    int    pvelIndex = -1;
-    for (int i = nearestIndex - 1; i >= 1; --i) {
-        if (i < 1 || i + 1 >= static_cast<int>(velocityData.size()))
-            continue;
-
-        double prevVal = velocityData[i - 1];
-        double currVal = velocityData[i];
-        double nextVal = velocityData[i + 1];
-
-        if (!std::isfinite(currVal))
-            continue;
-
-        bool isLocalMaximum = (currVal > prevVal && currVal >= nextVal);
-        bool isLocalMinimum = (currVal < prevVal && currVal <= nextVal);
-
-        if (desired == ExtremumType::LocalMaximum && isLocalMaximum) {
-            pvelIndex = i;
-            y_PVEL1   = currVal;
-            lm.PVEL1  = i / sr;
-            break;
-        }
-        if (desired == ExtremumType::LocalMinimum && isLocalMinimum) {
-            pvelIndex = i;
-            y_PVEL1   = currVal;
-            lm.PVEL1  = i / sr;
-            break;
+    // 2) Estimate a deadband from the pre-MaxC velocity region.
+    double maxAbsPast = 0.0;
+    for (int i = searchStart; i < nearestIndex; ++i) {
+        if (std::isfinite(velocityData[i])) {
+            maxAbsPast = std::max(maxAbsPast, std::fabs(velocityData[i]));
         }
     }
+
+    if (maxAbsPast <= 0.0)
+        return;
+
+    // Same idea as PVEL2: ignore tiny wiggles near zero.
+    const double deadband = m_reopeningDeadbandFraction * maxAbsPast;
+
+    // 3) Scan backward from MaxC.
+    //    Once we leave the near-zero region, we are inside the closing excursion.
+    //    Keep the strongest local extremum in that excursion.
+    double y_PVEL1 = std::numeric_limits<double>::quiet_NaN();
+    int pvelIndex = -1;
+
+    double strongestSampleValue = std::numeric_limits<double>::quiet_NaN();
+    int strongestSampleIndex = -1;
+
+    bool inClosingExcursion = false;
+    bool foundLocalCandidate = false;
+
+    for (int i = nearestIndex - 1; i >= searchStart; --i) {
+        if (i < 1 || i + 1 >= N)
+            continue;
+
+        const double prevVal = velocityData[i - 1];
+        const double currVal = velocityData[i];
+        const double nextVal = velocityData[i + 1];
+
+        if (!std::isfinite(prevVal) ||
+            !std::isfinite(currVal) ||
+            !std::isfinite(nextVal))
+            continue;
+
+        const double currAbs = std::fabs(currVal);
+
+        // Wait until the signal clearly leaves the zero/plateau region.
+        if (!inClosingExcursion) {
+            if (currAbs > deadband)
+                inClosingExcursion = true;
+            else
+                continue;
+        }
+
+        // Track strongest sample as a fallback.
+        if (strongestSampleIndex == -1 ||
+            currAbs > std::fabs(strongestSampleValue))
+        {
+            strongestSampleIndex = i;
+            strongestSampleValue = currVal;
+        }
+
+        const bool isLocalMaximum = (currVal > prevVal && currVal >= nextVal);
+        const bool isLocalMinimum = (currVal < prevVal && currVal <= nextVal);
+        const bool isLocalExtremum = isLocalMaximum || isLocalMinimum;
+
+        if (isLocalExtremum) {
+            if (!foundLocalCandidate ||
+                currAbs > std::fabs(y_PVEL1))
+            {
+                foundLocalCandidate = true;
+                pvelIndex = i;
+                y_PVEL1 = currVal;
+            }
+        }
+
+        // Since we are scanning backward, once we have found a candidate and
+        // return to the deadband, we have reached the pre-gesture side.
+        if ((foundLocalCandidate || strongestSampleIndex != -1) &&
+            currAbs <= deadband)
+        {
+            break;
+        }
+    }
+
+    // Fallback: if no formal local extremum was found, use the strongest sample.
+    if (pvelIndex == -1 && strongestSampleIndex != -1) {
+        pvelIndex = strongestSampleIndex;
+        y_PVEL1 = strongestSampleValue;
+    }
+
     if (pvelIndex == -1 || !std::isfinite(y_PVEL1))
         return;
 
+    lm.PVEL1 = pvelIndex / sr;
+
     // 4) Sign-normalized velocity: "toward target" is always positive.
-    //    Threshold is 20% of |PVEL1|.
-    double sign = (y_PVEL1 >= 0.0 ? 1.0 : -1.0);
+    const double sign = (y_PVEL1 >= 0.0 ? 1.0 : -1.0);
+
     auto vNorm = [&](int idx) -> double {
         return sign * velocityData[idx];
     };
-    double peakMag  = sign * y_PVEL1;   // > 0
-    double threshold = m_velocityThresholdFraction * peakMag;   // 20% of peak closing speed is default
 
-    // 5) GONS: first time *before* PVEL1 where v crosses +threshold upward
-    //    (acceleration toward target).
+    const double peakMag = sign * y_PVEL1;  // positive
+    const double threshold = m_velocityThresholdFraction * peakMag;
+
+    // 5) GONS: first time before PVEL1 where velocity crosses threshold upward.
     double gons = std::numeric_limits<double>::quiet_NaN();
+
     for (int i = pvelIndex; i >= 1; --i) {
-        double prevNorm = vNorm(i - 1);
-        double currNorm = vNorm(i);
+        const double prevNorm = vNorm(i - 1);
+        const double currNorm = vNorm(i);
 
         if (!std::isfinite(prevNorm) || !std::isfinite(currNorm))
             continue;
 
         if (prevNorm < threshold && currNorm >= threshold) {
-            double t1   = (i - 1) / sr;
-            double t2   = i / sr;
-            double frac = (threshold - prevNorm) / (currNorm - prevNorm);
+            const double t1 = (i - 1) / sr;
+            const double t2 = i / sr;
+            const double frac = (threshold - prevNorm) / (currNorm - prevNorm);
             gons = t1 + frac * (t2 - t1);
             break;
         }
     }
+
     lm.GONS = gons;
 
-    // 6) NONS: first time *after* PVEL1 where v crosses +threshold downward
-    //    (deceleration toward target into the constriction plateau).
+    // 6) NONS: first time after PVEL1 where velocity crosses threshold downward.
     double nons = std::numeric_limits<double>::quiet_NaN();
-    for (int i = pvelIndex; i < static_cast<int>(velocityData.size()) - 1; ++i) {
-        double currNorm = vNorm(i);
-        double nextNorm = vNorm(i + 1);
+
+    for (int i = pvelIndex; i < N - 1; ++i) {
+        const double currNorm = vNorm(i);
+        const double nextNorm = vNorm(i + 1);
 
         if (!std::isfinite(currNorm) || !std::isfinite(nextNorm))
             continue;
 
-        // Crossing from >= 0.2*PVEL1 down to < 0.2*PVEL1
         if (currNorm >= threshold && nextNorm < threshold) {
-            double t1   = i / sr;
-            double t2   = (i + 1) / sr;
-            double frac = (threshold - currNorm) / (nextNorm - currNorm);
+            const double t1 = i / sr;
+            const double t2 = (i + 1) / sr;
+            const double frac = (threshold - currNorm) / (nextNorm - currNorm);
             nons = t1 + frac * (t2 - t1);
             break;
         }
     }
+
     lm.NONS = nons;
 }
-
 
 void Label::findFollowingVelocityExtremumFromVector(Label::landmarks &lm,
                                                     double xCenterSec,
@@ -621,7 +670,7 @@ void Label::placeLabelAt(double x, QString labelName)
 
     if (!m_plot) return;
 
-    static const double DUPLICATE_EPSILON = 1e-3;
+    static const double DUPLICATE_EPSILON = 1e-6;
     for (auto *existingLine : m_labelLines) {
         const double existingX = existingLine->start->coords().x();
         if (qAbs(existingX - x) < DUPLICATE_EPSILON) return;
@@ -702,7 +751,7 @@ void Label::removeLabelAt(double x, const QString &legendName)
             m_plot->removeItem(it);
     };
 
-    static const double EPS = 1e-3;
+    static const double EPS = 1e-6;
 
     // Find the exact matching line for this channel + offset
     auto matchIt = std::find_if(
@@ -882,7 +931,8 @@ bool Label::selectLineIfMatch(const QString &legendName, double xOffset)
         const QString lineLegend = it.value();
         const double  lineX      = line->start->coords().x();
 
-        if (lineLegend == legendName && std::fabs(lineX - xOffset) < 1e-3) {
+        static const double EPS = 1e-6;
+        if (lineLegend == legendName && std::fabs(lineX - xOffset) < EPS) {
             clearSelectedLine();
             if (!m_labelLines.contains(line)) return false;
             line->setPen(QPen(Qt::red, 1.5));
@@ -1010,7 +1060,7 @@ void Label::moveHandleBy(QCPItemText *handle, double deltaX)
 
 void Label::updateLabelName(double x, const QString &actualName)
 {
-    const double EPS = 1e-3;
+    const double EPS = 1e-6;
     for (QCPItemLine *line : m_labelLines) {
         const double lx = line->start->coords().x();
         if (std::abs(lx - x) < EPS) {
