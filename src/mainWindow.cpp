@@ -27,6 +27,7 @@
 #include <QMouseEvent>
 #include <QRegularExpression>
 #include <QScrollBar>
+#include <QWheelEvent>
 #include <QSet>
 #include <QShortcut>
 #include <QTextStream>
@@ -272,6 +273,16 @@ mainWindow::mainWindow(QWidget *parent)
     connect(ui->applyConfigToAllButton, &QPushButton::clicked, this, &mainWindow::applyConfigToAllButtonClicked);
     connect(ui->channelsComboBox,    QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &mainWindow::onChannelsComboBoxIndexChanged);
+
+    m_cursorOverlayResumeTimer = new QTimer(this);
+    m_cursorOverlayResumeTimer->setSingleShot(true);
+
+    connect(m_cursorOverlayResumeTimer, &QTimer::timeout, this, [this]() {
+        for (auto *v : kinematicVisualizers) {
+            if (v)
+                v->setCursorOverlaySuspended(false);
+        }
+    });
 
     ui->scrollArea->setWidgetResizable(true);
     ui->scrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
@@ -1854,10 +1865,10 @@ bool mainWindow::writeCurrentLandmarksToCsv(const QString &csvFilePath,
 
         out << name << ","
             << channel << ","
-            << QString::number(offsetVal, 'f', 3) << ",";
+            << QString::number(offsetVal, 'f', 6) << ",";
 
         if (okY && std::isfinite(yVal))
-            out << QString::number(yVal, 'f', 3);
+            out << QString::number(yVal, 'f', 6);
 
         out << "\n";
     }
@@ -1953,12 +1964,9 @@ void mainWindow::removeSelectedLandmark()
     const QString chan = idx.siblingAtColumn(1).data().toString();
     const double  x    = idx.siblingAtColumn(2).data().toDouble();
 
-    // Remove only from the matching plot/channel
+    // Ask every label object to remove this exact landmark.
     for (auto v : kinematicVisualizers) {
         if (!v)
-            continue;
-
-        if (v->configName().trimmed() != chan.trimmed())
             continue;
 
         if (auto lbl = v->getLabel()) {
@@ -1968,8 +1976,6 @@ void mainWindow::removeSelectedLandmark()
 
         if (auto plot = v->getCustomPlot())
             plot->replot();
-
-        break; // only one matching visualizer should handle this landmark
     }
 
     // Remove the selected row from the model
@@ -2001,7 +2007,7 @@ void mainWindow::zoomInButtonClicked()
     if (!plot)
         return;
 
-    const double zoomFactor = 0.98; // in
+    const double zoomFactor = 0.95; // stronger zoom-in step
 
     QCPRange currentRange = plot->xAxis->range();
     double rangeSize = currentRange.size();
@@ -2015,8 +2021,6 @@ void mainWindow::zoomInButtonClicked()
     plot->xAxis2->setRange(lower, upper);
     plot->replot(QCustomPlot::rpQueuedReplot);
 
-    updateScrollBar();
-    rebuildSpectrogramForVisibleRange();
 }
 
 void mainWindow::zoomOutButtonClicked()
@@ -2028,7 +2032,7 @@ void mainWindow::zoomOutButtonClicked()
     if (!plot)
         return;
 
-    const double zoomFactor = 1.02; // out
+    const double zoomFactor = 1.05; // stronger zoom-out step
 
     QCPRange currentRange = plot->xAxis->range();
     double rangeSize = currentRange.size();
@@ -2042,8 +2046,6 @@ void mainWindow::zoomOutButtonClicked()
     plot->xAxis2->setRange(lower, upper);
     plot->replot(QCustomPlot::rpQueuedReplot);
 
-    updateScrollBar();
-    rebuildSpectrogramForVisibleRange();
 }
 
 void mainWindow::resetButtonClicked()
@@ -2058,9 +2060,6 @@ void mainWindow::resetButtonClicked()
     plot->xAxis->setRange(xAxisMinLimit, xAxisMaxLimit);
     plot->xAxis2->setRange(xAxisMinLimit, xAxisMaxLimit);
     plot->replot(QCustomPlot::rpQueuedReplot);
-
-    updateScrollBar();
-    rebuildSpectrogramForVisibleRange();
 }
 
 
@@ -2070,7 +2069,7 @@ void mainWindow::on_selectButton_clicked()
     double selectionEnd   = std::numeric_limits<double>::lowest();
     bool hasSelection = false;
 
-    for (auto visualizer : kinematicVisualizers) {
+    for (auto *visualizer : kinematicVisualizers) {
         QCPRange range = visualizer->getSelectionRange();
         if (range.lower < range.upper) {
             selectionStart = std::min(selectionStart, range.lower);
@@ -2098,9 +2097,6 @@ void mainWindow::on_selectButton_clicked()
     plot->xAxis->setRange(newLower, newUpper);
     plot->xAxis2->setRange(newLower, newUpper);
     plot->replot(QCustomPlot::rpQueuedReplot);
-
-    updateScrollBar();
-    rebuildSpectrogramForVisibleRange();
 }
 
 void mainWindow::updateTrackedParameter() {
@@ -2344,10 +2340,59 @@ void mainWindow::buildSpectrogramForVisualizer(KinematicVisualizer *visualizer,
 
 
 void mainWindow::visualizeSignal(spanFile &data) {
-    // Call clearAllPlots() BEFORE this when rebuilding.
+    // Call clearAllPlots() before this when rebuilding.
 
     QSizePolicy sizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     const int fixedHeight = 150;
+
+    auto suspendCursorOverlaysBriefly = [this]() {
+        for (auto *v : kinematicVisualizers) {
+            if (v)
+                v->setCursorOverlaySuspended(true);
+        }
+
+        if (m_cursorOverlayResumeTimer)
+            m_cursorOverlayResumeTimer->start(120);
+    };
+
+    auto handleViewRangeChanged = [this, suspendCursorOverlaysBriefly](const QCPRange &) {
+        if (m_handlingViewRangeChange)
+            return;
+
+        m_handlingViewRangeChange = true;
+
+        suspendCursorOverlaysBriefly();
+        updateScrollBar();
+        rebuildSpectrogramForVisibleRange();
+
+        m_handlingViewRangeChange = false;
+    };
+
+    auto enableHorizontalWheelZoom = [this,
+                                      suspendCursorOverlaysBriefly,
+                                      handleViewRangeChanged](QCustomPlot *plot) {
+        if (!plot)
+            return;
+
+        // Native QCustomPlot wheel zoom, horizontal only.
+        plot->setInteraction(QCP::iRangeZoom, true);
+        plot->axisRect()->setRangeZoom(Qt::Horizontal);
+
+        // Hide cursor overlays immediately when wheel zoom begins.
+        connect(plot, &QCustomPlot::mouseWheel,
+                this,
+                [suspendCursorOverlaysBriefly](QWheelEvent *event) {
+                    Q_UNUSED(event);
+                    suspendCursorOverlaysBriefly();
+                });
+
+        // Single source of truth after any X-range change:
+        // wheel zoom, button zoom, reset, select zoom, scrollbar movement.
+        connect(plot->xAxis,
+                qOverload<const QCPRange &>(&QCPAxis::rangeChanged),
+                this,
+                handleViewRangeChanged);
+    };
 
     ui->posPlotVL->setSpacing(0);
     ui->audioPlotVL->setContentsMargins(0, 0, 0, 0);
@@ -2369,11 +2414,12 @@ void mainWindow::visualizeSignal(spanFile &data) {
         QMap<QString, QVector<double>> audioDataMap;
         audioDataMap["Audio"] = audioDataVector;
 
-        audioVisualizer->visualizeSignal(audioDataMap, "Audio", 1.5, data.wavSR);
+        audioVisualizer->visualizeSignal(audioDataMap, "Audio", 0.8, data.wavSR);
 
         // update 3D when moving the mouse over the audio plot
         if (QCustomPlot *plot = audioVisualizer->getCustomPlot()) {
-            plot->setMouseTracking(true); // <-- important: get mouseMove even without button pressed
+            plot->setMouseTracking(true);
+            enableHorizontalWheelZoom(plot);
 
             connect(plot, &QCustomPlot::mouseMove, this,
                     [this, plot](QMouseEvent *event) {
@@ -2406,6 +2452,7 @@ void mainWindow::visualizeSignal(spanFile &data) {
         spectrogramVisualizer->setFixedHeight(100);
 
         buildSpectrogramForVisualizer(spectrogramVisualizer, data);
+        enableHorizontalWheelZoom(spectrogramVisualizer->getCustomPlot());
 
         ui->audioPlotVL->addWidget(spectrogramVisualizer);
         kinematicVisualizers.append(spectrogramVisualizer);
@@ -2573,6 +2620,8 @@ void mainWindow::visualizeSignal(spanFile &data) {
         }
 
         visualizer->visualizeSignal(posDataMap, config.name, 2, data.wavSR);
+        enableHorizontalWheelZoom(visualizer->getCustomPlot());
+
         ui->posPlotVL->addWidget(visualizer);
         kinematicVisualizers.append(visualizer);
 
@@ -2612,9 +2661,9 @@ void mainWindow::addLandmarkToModel(const QString &channel,
     QList<QStandardItem *> items;
     items << new QStandardItem(finalName)
           << new QStandardItem(updatedChannel)
-          << new QStandardItem(QString::number(offset, 'f', 3))
+          << new QStandardItem(QString::number(offset, 'f', 6))
           << new QStandardItem(std::isfinite(yValue)
-                                   ? QString::number(yValue, 'f', 3)
+                                   ? QString::number(yValue, 'f', 6)
                                    : QString());
 
     items[1]->setFlags(items[1]->flags() & ~Qt::ItemIsEditable);
@@ -2667,8 +2716,8 @@ void mainWindow::updateScrollBar()
     ui->rangeScrollBar->setVisible(true);
     ui->rangeScrollBar->setEnabled(true);
 
-    const int precision = 1000;
-    const int pageStep = static_cast<int>((currentRangeSize / fullRange) * precision);
+    const int precision = 1000000;
+    const int pageStep = std::max(1, static_cast<int>((currentRangeSize / fullRange) * precision));
 
     if (pageStep <= 0 || pageStep >= precision) {
         ui->rangeScrollBar->setVisible(false);
@@ -2705,7 +2754,7 @@ void mainWindow::onRangeScrollBarValueChanged(int value)
 
     const double currentRangeSize = plot->xAxis->range().size();
 
-    const int precision = 1000;
+    const int precision = 1000000;
     const int pageStep = ui->rangeScrollBar->pageStep();
 
     const double minMovableCenter = xAxisMinLimit + currentRangeSize / 2.0;
@@ -2736,7 +2785,6 @@ void mainWindow::onRangeScrollBarValueChanged(int value)
     plot->xAxis2->setRange(newLower, newUpper);
     plot->replot(QCustomPlot::rpQueuedReplot);
 
-    rebuildSpectrogramForVisibleRange();
 }
 
 
@@ -3387,7 +3435,7 @@ void mainWindow::placeLandmark(const QString &channelName, double offset, const 
     QList<QStandardItem *> items;
     QStandardItem *itemName    = new QStandardItem(labelName.isEmpty() ? "Unnamed" : labelName);
     QStandardItem *itemChannel = new QStandardItem(channelName);
-    QStandardItem *itemOffset  = new QStandardItem(QString::number(offset, 'f', 3));
+    QStandardItem *itemOffset  = new QStandardItem(QString::number(offset, 'f', 6));
     itemChannel->setFlags(itemChannel->flags() & ~Qt::ItemIsEditable);
     itemOffset->setFlags(itemOffset->flags() & ~Qt::ItemIsEditable);
     items << itemName << itemChannel << itemOffset;
@@ -3470,8 +3518,7 @@ bool mainWindow::loadSpanIntoUi(const QString &filePath)
     ui->fileNameLabel->setText(QFileInfo(filePath).fileName());
     enableFilesTabButtons(true);
 
-    ui->rangeScrollBar->setVisible(false);
-    ui->rangeScrollBar->setEnabled(false);
+    updateScrollBar();
 
     reloadTemplatesForCurrentDir();
 
@@ -3923,7 +3970,7 @@ void mainWindow::onLabelClicked(const QString &channelName, double offset)
         QString modelChannel = landmarkListModel->item(row, 1)->text();
         double modelOffset   = landmarkListModel->item(row, 2)->text().toDouble();
 
-        if (modelChannel == channelName && qAbs(modelOffset - offset) < 1e-1) {
+        if (modelChannel == channelName && qAbs(modelOffset - offset) < 1e-5) {
             ui->landmarkListView->clearSelection();
             ui->landmarkListView->selectRow(row);
             ui->landmarkListView->scrollTo(landmarkListModel->index(row, 0));
@@ -3965,7 +4012,7 @@ void mainWindow::onLabelMoved(const QString &channelName,
                               double oldX)
 {
     Q_UNUSED(labelName);
-    const double EPS = 1e-3;
+    const double EPS = 1e-6;
 
     // Primary: find the row that matches the SAME channel and the OLD offset.
     int targetRow = -1;
@@ -3994,12 +4041,12 @@ void mainWindow::onLabelMoved(const QString &channelName,
     }
 
     if (targetRow != -1) {
-        landmarkListModel->item(targetRow, 2)->setText(QString::number(newX, 'f', 3));
+        landmarkListModel->item(targetRow, 2)->setText(QString::number(newX, 'f', 6));
 
         const double newY = getLandmarkYValue(channelName, newX);
         if (landmarkListModel->columnCount() > 3 && landmarkListModel->item(targetRow, 3)) {
             landmarkListModel->item(targetRow, 3)->setText(
-                std::isfinite(newY) ? QString::number(newY, 'f', 3) : QString()
+                std::isfinite(newY) ? QString::number(newY, 'f', 6) : QString()
                 );
         }
 
@@ -4221,7 +4268,7 @@ void mainWindow::setupMenus()
     QMenu *viewMenu = mb->addMenu(tr("&View"));
 
     m_selectRangeAction = addMenuAction(viewMenu, tr("&Select Range"),
-                                        QKeySequence(),
+                                        QKeySequence(Qt::Key_S),
                                         &mainWindow::on_selectButton_clicked);
 
     m_zoomInAction = addMenuAction(viewMenu, tr("Zoom &In"),
