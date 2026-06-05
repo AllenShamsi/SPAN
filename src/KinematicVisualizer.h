@@ -20,8 +20,8 @@ public:
 
     // Rendering
     void visualizeSignal(const QMap<QString, QVector<double>> &dataMap,
-                                              const QString &configName,
-                                              double penWidth,
+                         const QString &configName,
+                         double penWidth,
                          int samplingRate);
 
     void visualizeSpectrogram(const QVector<QVector<double>> &spectrogramData,
@@ -53,6 +53,8 @@ public:
 
     double getSignalValueAt(double x, QString *usedAxis = nullptr) const;
 
+    void setCursorOverlaySuspended(bool suspended);
+
 public slots:
     void zoomToSelection();
 
@@ -79,6 +81,8 @@ private:
     QCPItemLine *hLine      = nullptr;  // horizontal cursor
     QCPItemText *coordText  = nullptr;  // "X: ..., Y: ..."
     QCPItemRect *coordFrame = nullptr;  // background for coordText
+
+    bool m_suspendCursorOverlay = false; // plotting is suppressed while zooming
 
     // Label widget (handles drag handles etc.)
     Label *m_label = nullptr;
