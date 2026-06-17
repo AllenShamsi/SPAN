@@ -95,6 +95,24 @@ You can then manage the configuration list with:
 - Updating a configuration changes how the signal is displayed, not the underlying stored positional data.
 - **Apply to All** writes the current configuration list to all loaded `.span` files.
 
+
+### Two-dimensional gesture views
+
+SPAN can display multiple dimensions from the same sensor in one configured plot. For example:
+
+- `TTz` displays tongue-tip vertical displacement
+- `TTx` displays tongue-tip horizontal displacement
+- `TTxz` displays tongue-tip X and Z displacement together
+- `TDxz` displays tongue-dorsum X and Z displacement together
+
+When exactly two displacement dimensions are selected, SPAN treats the plot as a two-dimensional gesture view. The visible traces remain positional traces, but assisted landmark placement can use a hidden tangential velocity basis.
+
+For example, for `TTxz`, SPAN uses: vTTtan = sqrt(vTTx^2 + vTTz^2)
+
+This is useful for gestures where movement may involve more than one spatial dimension, such as coronal tongue-tip gestures involving both raising and fronting/backing.
+
+The regular plotted value remains positional. For TTxz, the regular landmark-table Y value is anchored to the displayed position dimension, preferably z when z is present. Tangential velocity values are exported separately in the companion tangential-values CSV.
+
 ---
 
 ## 4. Create derived channels
@@ -136,6 +154,12 @@ The landmark table stores:
 
 ### CSV export
 Click **Export CSV** to save the current landmark table as a `.csv` file.
+
+The regular landmark CSV contains: Name,Channel,Offset,Y
+
+For ordinary one-dimensional traces, Y is the plotted value at the landmark time.
+
+For two-dimensional displacement gesture views such as TTxz, Y remains a positional display value. It is not the tangential velocity value. For TTxz, Y is anchored to TTz when z is one of the selected dimensions. If the current landmark table contains two-dimensional displacement gesture landmarks, SPAN also writes a companion file: *_tangential_values.csv. The companion file is generated from the same Export CSV action.
 
 ---
 
