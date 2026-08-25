@@ -3,6 +3,7 @@
 #include <QProxyStyle>
 #include <QStyleFactory>
 #include "mainWindow.h"
+#include <QStyleHints>
 
 class NoTransientScrollBarsStyle : public QProxyStyle {
 public:
@@ -24,10 +25,11 @@ int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
 
-    app.setWindowIcon(QIcon(":/icons/SPAN.jpg"));
+#ifdef Q_OS_WIN
+    app.styleHints()->setColorScheme(Qt::ColorScheme::Light);
+#endif
 
 #ifdef Q_OS_MAC
-    // Must be set BEFORE any widgets are created
     QStyle *fusion = QStyleFactory::create("Fusion");
     app.setStyle(new NoTransientScrollBarsStyle(fusion));
 #endif
