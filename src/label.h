@@ -90,6 +90,13 @@ private:
                                                  double xCenterSec,
                                                  const std::vector<double> &velocityData,
                                                  double sr);
+    void findTangentialGestureLandmarksFromSpeed(landmarks &lm,
+                                                 double xCenterSec,
+                                                 const std::vector<double> &speedData,
+                                                 double sr);
+    double findNearestVelocityMinimum(double xClicked,
+                                      const std::vector<double> &velocityData,
+                                      double sr) const;
 
 private:
     QCustomPlot *m_plot{nullptr};
