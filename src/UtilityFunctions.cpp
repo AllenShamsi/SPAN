@@ -186,9 +186,11 @@ Eigen::Matrix4d estimateRigidTransform(const Eigen::MatrixXd& sourcePts,
     return RT;
 }
 
-OcclusalCorrectionModel buildOcclusalCorrectionModel(const std::vector<channel>& bitePlaneData,
-                                                     const std::vector<int>& refIdx,
-                                                     const std::vector<int>& bpIdx)
+OcclusalCorrectionModel buildOcclusalCorrectionModel(
+    const std::vector<channel>& bitePlaneData,
+    const std::vector<int>& refIdx,
+    const std::vector<int>& bpIdx,
+    int originIdx)
 {
     validateConsistentSampleCounts(bitePlaneData);
     validateChannelIndices(bitePlaneData, refIdx, "reference sensors");
@@ -202,11 +204,30 @@ OcclusalCorrectionModel buildOcclusalCorrectionModel(const std::vector<channel>&
         throw std::runtime_error("At least three reference sensors are required.");
     }
 
-    const Eigen::Vector3d bpL = computeMeanSensorPosition(bitePlaneData[bpIdx[0]]);
-    const Eigen::Vector3d bpF = computeMeanSensorPosition(bitePlaneData[bpIdx[1]]);
-    const Eigen::Vector3d bpR = computeMeanSensorPosition(bitePlaneData[bpIdx[2]]);
+    const Eigen::Vector3d bpL =
+        computeMeanSensorPosition(bitePlaneData[bpIdx[0]]);
+    const Eigen::Vector3d bpF =
+        computeMeanSensorPosition(bitePlaneData[bpIdx[1]]);
+    const Eigen::Vector3d bpR =
+        computeMeanSensorPosition(bitePlaneData[bpIdx[2]]);
 
-    const Eigen::Vector3d origin = (bpL + bpF + bpR) / 3.0;
+    // Default: preserve the original SPAN centroid origin.
+    // If the user selected a raw sensor, use its mean position
+    // in the bite-plane recording instead.
+    Eigen::Vector3d origin;
+
+    if (originIdx >= 0) {
+        validateChannelIndices(
+            bitePlaneData,
+            std::vector<int>{originIdx},
+            "coordinate origin sensor");
+
+        origin =
+            computeMeanSensorPosition(bitePlaneData[originIdx]);
+    } else {
+        origin = (bpL + bpF + bpR) / 3.0;
+    }
+
     const Eigen::Vector3d lrMid = 0.5 * (bpL + bpR);
 
     const Eigen::Vector3d xAxis = safeNormalized(bpR - bpL, "bite-plane left-right axis");
