@@ -1,4 +1,5 @@
 #include "GestureTemplateManager.h"
+#include "SignalProcessing.h"
 
 #include <QDir>
 #include <QFile>
@@ -200,13 +201,79 @@ static int motionParamToInt(motionParam p)
 static inline QString baseSensorName(QString s)
 {
     s = s.trimmed();
-    QRegularExpression re(
-        R"(^(?:i)?(?:[va])?(.+?)(?:[xyz])?$)",
-        QRegularExpression::CaseInsensitiveOption
-        );
-    auto m = re.match(s);
-    return m.hasMatch() ? m.captured(1).trimmed() : s;
+
+    if (s.isEmpty())
+        return s;
+
+    // Strip optional leading invert prefix.
+    if (s.startsWith(QLatin1Char('i'), Qt::CaseInsensitive))
+        s.remove(0, 1);
+
+    // Strip optional motion prefix.
+    if (!s.isEmpty()) {
+        const QChar c = s.at(0);
+
+        if (c == QLatin1Char('v') || c == QLatin1Char('V') ||
+            c == QLatin1Char('a') || c == QLatin1Char('A'))
+        {
+            s.remove(0, 1);
+        }
+    }
+
+    // Strip up to three trailing axis letters.
+    // This is critical for names like TTxz, TTxy, TDxz.
+    int removed = 0;
+
+    while (!s.isEmpty() && removed < 3) {
+        const QChar c = s.at(s.size() - 1).toLower();
+
+        if (c == QLatin1Char('x') ||
+            c == QLatin1Char('y') ||
+            c == QLatin1Char('z'))
+        {
+            s.chop(1);
+            ++removed;
+        } else {
+            break;
+        }
+    }
+
+    return s.trimmed();
 }
+
+static inline int selectedAxisCount(bool x, bool y, bool z)
+{
+    int n = 0;
+    if (x) ++n;
+    if (y) ++n;
+    if (z) ++n;
+    return n;
+}
+
+static inline bool isTwoDimensionalDisplacementGestureConfig(const SensorConfig &cfg)
+{
+    return cfg.param == motionParam::Displacement &&
+           selectedAxisCount(cfg.x, cfg.y, cfg.z) == 2;
+}
+
+static inline bool isTwoDimensionalDisplacementGestureTemplateChannel(
+    const GestureTemplateChannelData &cd)
+{
+    return cd.cfgParam == motionParamToInt(motionParam::Displacement) &&
+           selectedAxisCount(cd.cfgX, cd.cfgY, cd.cfgZ) == 2;
+}
+
+static inline double componentFromPosData(const posData &p, QChar axis)
+{
+    axis = axis.toLower();
+
+    if (axis == QLatin1Char('x')) return p.x;
+    if (axis == QLatin1Char('y')) return p.y;
+    if (axis == QLatin1Char('z')) return p.z;
+
+    return std::numeric_limits<double>::quiet_NaN();
+}
+
 
 // Find SensorConfig by name in a spanFile
 static const SensorConfig *findConfigForChannel(const spanFile &data,
@@ -230,26 +297,71 @@ static bool extractScalarSeriesForConfig(const spanFile      &data,
         data.sensors.begin(), data.sensors.end(),
         [&baseConfigName, &cfg](const std::pair<int, std::string> &sensor) {
             const QString s = QString::fromStdString(sensor.second).trimmed();
-            return s == baseConfigName.trimmed() || s == cfg.name.trimmed();
+            return s.compare(baseConfigName.trimmed(), Qt::CaseInsensitive) == 0 ||
+                   s.compare(cfg.name.trimmed(), Qt::CaseInsensitive) == 0;
         });
 
     if (it == data.sensors.end())
         return false;
 
     int channelIndex = it->first - 1;
+
     if (channelIndex < 0 ||
         channelIndex >= static_cast<int>(data.channelsData.size()))
         return false;
 
     const auto &vec = data.channelsData[static_cast<size_t>(channelIndex)];
+
     if (vec.empty())
         return false;
 
-    out.resize(static_cast<int>(vec.size()));
+    // For two-dimensional displacement gesture views, such as TTxz or TDxz,
+    // DTW should use the same basis as annotation:
+    //     sqrt(vx^2 + vz^2), sqrt(vx^2 + vy^2), etc.
+    if (isTwoDimensionalDisplacementGestureConfig(cfg)) {
+        const int sr =
+            data.wavSR > 0
+                ? data.wavSR
+                : data.posSR;
 
-    const bool useX = cfg.x;
-    const bool useY = cfg.y;
-    const bool useZ = cfg.z;
+        if (sr <= 0)
+            return false;
+
+        const auto velocity = SignalProcessing::calculateVelocity(vec, sr);
+
+        if (velocity.empty())
+            return false;
+
+        out.resize(static_cast<int>(velocity.size()));
+
+        for (int i = 0; i < out.size(); ++i) {
+            const auto &v = velocity[static_cast<size_t>(i)];
+
+            double sumSq = 0.0;
+
+            if (cfg.x) {
+                const double c = componentFromPosData(v, QLatin1Char('x'));
+                if (std::isfinite(c)) sumSq += c * c;
+            }
+
+            if (cfg.y) {
+                const double c = componentFromPosData(v, QLatin1Char('y'));
+                if (std::isfinite(c)) sumSq += c * c;
+            }
+
+            if (cfg.z) {
+                const double c = componentFromPosData(v, QLatin1Char('z'));
+                if (std::isfinite(c)) sumSq += c * c;
+            }
+
+            out[i] = std::sqrt(sumSq);
+        }
+
+        return true;
+    }
+
+    // behavior for ordinary one-dimensional or non-gesture configs.
+    out.resize(static_cast<int>(vec.size()));
 
     for (int i = 0; i < out.size(); ++i) {
         const auto &s = vec[static_cast<size_t>(i)];
@@ -257,20 +369,20 @@ static bool extractScalarSeriesForConfig(const spanFile      &data,
         double sum   = 0.0;
         int    count = 0;
 
-        if (useX) { sum += s.x; ++count; }
-        if (useY) { sum += s.y; ++count; }
-        if (useZ) { sum += s.z; ++count; }
+        if (cfg.x) { sum += s.x; ++count; }
+        if (cfg.y) { sum += s.y; ++count; }
+        if (cfg.z) { sum += s.z; ++count; }
 
         if (count > 0)
             out[i] = sum / count;
         else
-            out[i] = s.x; // fallback, should basically never be hit
+            out[i] = s.x;
     }
 
     return true;
 }
 
-// Multi-channel DTW (unchanged from your version)
+// Multi-channel DTW
 static bool dtwAlignMulti(const QVector<QVector<double>> &tpl,
                           const QVector<QVector<double>> &tok,
                           QVector<int>                   &tokenIndexForTplOut)
@@ -366,161 +478,238 @@ static bool dtwAlignMulti(const QVector<QVector<double>> &tpl,
     return true;
 }
 
-
 static int refineMaxCUsingVelocity(const QVector<double> &disp,
                                    int idxApprox,
-                                   double sampleRate)
+                                   double sampleRate,
+                                   bool wantMax)
 {
     const int N = disp.size();
+
     if (N < 5 || sampleRate <= 0.0 || idxApprox < 2 || idxApprox > N - 3)
-        return idxApprox; // nothing to do / not enough context
-
-    // 1) Build velocity series (simple backward difference)
-    QVector<double> vel(N, 0.0);
-    for (int i = 1; i < N; ++i)
-        vel[i] = (disp[i] - disp[i - 1]) * sampleRate;
-
-    // 2) Look ± ~100 ms around the DTW-mapped MaxC
-    int halfWin = int(std::round(0.10 * sampleRate)); // 100 ms
-    if (halfWin < 5)        halfWin = 5;
-    if (halfWin > N / 2)    halfWin = N / 2;
-
-    int leftBound  = std::max(1,        idxApprox - halfWin);
-    int rightBound = std::min(N - 2,    idxApprox + halfWin);
-
-    auto strongestExtremumLeft = [&](int start) -> int {
-        int    bestIdx = -1;
-        double bestMag = 0.0;
-        for (int i = start; i >= leftBound; --i) {
-            double prev = vel[i - 1];
-            double cur  = vel[i];
-            double next = vel[i + 1];
-
-            bool isMax = (cur > prev && cur >= next);
-            bool isMin = (cur < prev && cur <= next);
-            if (!isMax && !isMin)
-                continue;
-
-            double mag = std::fabs(cur);
-            if (mag > bestMag) {
-                bestMag = mag;
-                bestIdx = i;
-            }
-        }
-        return bestIdx;
-    };
-
-    auto strongestExtremumRight = [&](int start) -> int {
-        int    bestIdx = -1;
-        double bestMag = 0.0;
-        for (int i = start; i <= rightBound; ++i) {
-            double prev = vel[i - 1];
-            double cur  = vel[i];
-            double next = vel[i + 1];
-
-            bool isMax = (cur >= prev && cur > next);
-            bool isMin = (cur <= prev && cur < next);
-            if (!isMax && !isMin)
-                continue;
-
-            double mag = std::fabs(cur);
-            if (mag > bestMag) {
-                bestMag = mag;
-                bestIdx = i;
-            }
-        }
-        return bestIdx;
-    };
-
-    // strongest closing/opening peaks around the DTW-mapped MaxC
-    int idxP1 = strongestExtremumLeft (idxApprox - 1);
-    int idxP2 = strongestExtremumRight(idxApprox + 1);
-    if (idxP1 < 0 || idxP2 < 0)
-        return idxApprox;  // cannot find both sides robustly
-
-    if (idxP2 < idxP1)
-        std::swap(idxP1, idxP2);
-
-    // 3) Find near-zero velocity between P1 and P2
-    int    idxZero   = -1;
-    double bestAbsV  = std::numeric_limits<double>::max();
-    for (int i = idxP1 + 1; i <= idxP2 - 1; ++i) {
-        double a = std::fabs(vel[i]);
-        if (a < bestAbsV) {
-            bestAbsV = a;
-            idxZero  = i;
-        }
-    }
-    if (idxZero < 0)
         return idxApprox;
 
-    // 4) Decide if MaxC should be a max or min from local displacement shape
-    double yPrev = disp[idxApprox - 1];
-    double y0    = disp[idxApprox];
-    double yNext = disp[idxApprox + 1];
+    // Search near the DTW-mapped anchor.
+    // We want the nearest displacement extremum of the SAME polarity
+    // as the template anchor, not the strongest opposite-polarity event nearby.
+    int halfWin = static_cast<int>(std::round(0.10 * sampleRate)); // 100 ms
 
-    bool wantMax;
-    if (y0 >= yPrev && y0 >= yNext) {
-        wantMax = true;
-    } else if (y0 <= yPrev && y0 <= yNext) {
-        wantMax = false;
-    } else {
-        // ambiguous: choose the direction with the larger excursion
-        double up   = std::max(yPrev, yNext) - y0;
-        double down = y0 - std::min(yPrev, yNext);
-        wantMax = (down >= up);
+    if (halfWin < 5)
+        halfWin = 5;
+
+    if (halfWin > N / 2)
+        halfWin = N / 2;
+
+    const int leftBound  = std::max(1,     idxApprox - halfWin);
+    const int rightBound = std::min(N - 2, idxApprox + halfWin);
+
+    int bestIdx = -1;
+    double bestDistance = std::numeric_limits<double>::max();
+
+    for (int i = leftBound; i <= rightBound; ++i) {
+        const double prev = disp[i - 1];
+        const double cur  = disp[i];
+        const double next = disp[i + 1];
+
+        if (!std::isfinite(prev) ||
+            !std::isfinite(cur) ||
+            !std::isfinite(next))
+            continue;
+
+        const bool isMax = (cur >= prev && cur >= next) &&
+                           (cur > prev || cur > next);
+
+        const bool isMin = (cur <= prev && cur <= next) &&
+                           (cur < prev || cur < next);
+
+        const bool wanted = wantMax ? isMax : isMin;
+
+        if (!wanted)
+            continue;
+
+        const double d = std::fabs(static_cast<double>(i - idxApprox));
+
+        if (d < bestDistance) {
+            bestDistance = d;
+            bestIdx = i;
+        }
     }
 
-    // 5) Around idxZero, snap to best displacement extremum of the chosen type
-    int dispHalfWin = int(std::round(0.03 * sampleRate)); // ~30 ms
-    if (dispHalfWin < 2) dispHalfWin = 2;
+    if (bestIdx >= 0)
+        return bestIdx;
 
-    int dispLeft  = std::max(1,       idxZero - dispHalfWin);
-    int dispRight = std::min(N - 2,   idxZero + dispHalfWin);
-    if (dispLeft > dispRight)
-        return idxApprox;
+    // Fallback: if smoothing/plateaus prevent a formal local extremum,
+    // choose the strongest point of the requested polarity in the local window.
+    bestIdx = idxApprox;
 
-    int bestIdxDisp = -1;
     if (wantMax) {
-        double bestVal = -std::numeric_limits<double>::max();
-        for (int i = dispLeft; i <= dispRight; ++i) {
-            double prev = disp[i - 1];
-            double cur  = disp[i];
-            double next = disp[i + 1];
-            bool isMax  = (cur >= prev && cur >= next);
-            if (!isMax) continue;
+        double bestVal = -std::numeric_limits<double>::infinity();
+
+        for (int i = leftBound; i <= rightBound; ++i) {
+            const double cur = disp[i];
+
+            if (!std::isfinite(cur))
+                continue;
+
             if (cur > bestVal) {
-                bestVal    = cur;
-                bestIdxDisp = i;
+                bestVal = cur;
+                bestIdx = i;
             }
         }
     } else {
-        double bestVal = std::numeric_limits<double>::max();
-        for (int i = dispLeft; i <= dispRight; ++i) {
-            double prev = disp[i - 1];
-            double cur  = disp[i];
-            double next = disp[i + 1];
-            bool isMin  = (cur <= prev && cur <= next);
-            if (!isMin) continue;
+        double bestVal = std::numeric_limits<double>::infinity();
+
+        for (int i = leftBound; i <= rightBound; ++i) {
+            const double cur = disp[i];
+
+            if (!std::isfinite(cur))
+                continue;
+
             if (cur < bestVal) {
-                bestVal    = cur;
-                bestIdxDisp = i;
+                bestVal = cur;
+                bestIdx = i;
             }
         }
     }
 
-    if (bestIdxDisp < 0)
-        return idxApprox;
-
-    return bestIdxDisp;
+    return bestIdx;
 }
 
+static int refineMaxCUsingSpeedMinimum(const QVector<double> &speed,
+                                       int idxApprox,
+                                       double sampleRate)
+{
+    const int N = speed.size();
+
+    if (N < 5 || sampleRate <= 0.0 || idxApprox < 2 || idxApprox > N - 3)
+        return idxApprox;
+
+    int halfWin = static_cast<int>(std::round(0.10 * sampleRate)); // 100 ms
+
+    if (halfWin < 5)
+        halfWin = 5;
+
+    if (halfWin > N / 2)
+        halfWin = N / 2;
+
+    const int leftBound  = std::max(1,     idxApprox - halfWin);
+    const int rightBound = std::min(N - 2, idxApprox + halfWin);
+
+    int bestLocalMin = -1;
+    double bestDistance = std::numeric_limits<double>::max();
+
+    for (int i = leftBound; i <= rightBound; ++i) {
+        const double prev = speed[i - 1];
+        const double cur  = speed[i];
+        const double next = speed[i + 1];
+
+        if (!std::isfinite(prev) ||
+            !std::isfinite(cur) ||
+            !std::isfinite(next))
+            continue;
+
+        const bool isLocalMin = (cur <= prev && cur <= next);
+
+        if (!isLocalMin)
+            continue;
+
+        const double d = std::fabs(static_cast<double>(i - idxApprox));
+
+        if (d < bestDistance) {
+            bestDistance = d;
+            bestLocalMin = i;
+        }
+    }
+
+    if (bestLocalMin >= 0)
+        return bestLocalMin;
+
+    // Fallback: choose the lowest-speed sample in the local window.
+    int bestIdx = idxApprox;
+    double bestValue = std::numeric_limits<double>::max();
+
+    for (int i = leftBound; i <= rightBound; ++i) {
+        const double cur = speed[i];
+
+        if (!std::isfinite(cur))
+            continue;
+
+        if (cur < bestValue) {
+            bestValue = cur;
+            bestIdx = i;
+        }
+    }
+
+    return bestIdx;
+}
+
+static bool templateAnchorWantsMaximum(const QVector<double> &tplDisp,
+                                       int idxAnchor,
+                                       double sampleRate)
+{
+    const int N = tplDisp.size();
+
+    if (N < 5 || idxAnchor < 1 || idxAnchor > N - 2)
+        return true; // safe default for ordinary peak-like MaxC
+
+    const double prev = tplDisp[idxAnchor - 1];
+    const double cur  = tplDisp[idxAnchor];
+    const double next = tplDisp[idxAnchor + 1];
+
+    if (!std::isfinite(cur))
+        return true;
+
+    if (std::isfinite(prev) && std::isfinite(cur) && std::isfinite(next)) {
+        const bool isLocalMax = (cur >= prev && cur >= next) &&
+                                (cur > prev || cur > next);
+
+        const bool isLocalMin = (cur <= prev && cur <= next) &&
+                                (cur < prev || cur < next);
+
+        if (isLocalMax)
+            return true;
+
+        if (isLocalMin)
+            return false;
+    }
+
+    // If the stored MaxC index is slightly off the exact extremum,
+    // compare whether it is closer in value to the local max or local min.
+    int halfWin = static_cast<int>(std::round(0.04 * sampleRate)); // 40 ms
+
+    if (halfWin < 2)
+        halfWin = 2;
+
+    const int leftBound  = std::max(0,     idxAnchor - halfWin);
+    const int rightBound = std::min(N - 1, idxAnchor + halfWin);
+
+    double localMax = -std::numeric_limits<double>::infinity();
+    double localMin =  std::numeric_limits<double>::infinity();
+
+    for (int i = leftBound; i <= rightBound; ++i) {
+        const double v = tplDisp[i];
+
+        if (!std::isfinite(v))
+            continue;
+
+        localMax = std::max(localMax, v);
+        localMin = std::min(localMin, v);
+    }
+
+    if (!std::isfinite(localMax) || !std::isfinite(localMin))
+        return true;
+
+    const double distToMax = std::fabs(cur - localMax);
+    const double distToMin = std::fabs(cur - localMin);
+
+    return distToMax <= distToMin;
+}
 
 } // namespace
 
 // ---------------------------------------------------------
 // Public DTW / apply API
 // ---------------------------------------------------------
+
 
 GestureTemplateManager::ApplyResult
 GestureTemplateManager::applyTemplateToSpan(const spanFile        &file,
@@ -707,8 +896,25 @@ GestureTemplateManager::applyTemplateToSpan(const spanFile        &file,
             if (iMaxC_full >= tokMultiFull[c].size())
                 iMaxC_full = tokMultiFull[c].size() - 1;
 
-            const int iMaxC_refined =
-                refineMaxCUsingVelocity(tokMultiFull[c], iMaxC_full, sr);
+            const bool twoDimensionalGesture =
+                isTwoDimensionalDisplacementGestureTemplateChannel(cdTpl);
+
+            int iMaxC_refined = iMaxC_full;
+
+            if (twoDimensionalGesture) {
+                // For TTxz / TDxz tangential-speed templates, MaxC corresponds to
+                // a local speed minimum, not a signed displacement peak/trough.
+                iMaxC_refined =
+                    refineMaxCUsingSpeedMinimum(tokMultiFull[c], iMaxC_full, sr);
+            } else {
+                // For ordinary 1D displacement templates, preserve the polarity
+                // of the exemplar/template anchor.
+                const bool wantMax =
+                    templateAnchorWantsMaximum(tplMultiFull[c], jMaxC_full, sr);
+
+                iMaxC_refined =
+                    refineMaxCUsingVelocity(tokMultiFull[c], iMaxC_full, sr, wantMax);
+            }
 
             const double tTokenMaxC = double(iMaxC_refined) / sr;
             timesThisChannel.append(tTokenMaxC);
