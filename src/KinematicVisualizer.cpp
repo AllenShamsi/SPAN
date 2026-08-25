@@ -1159,3 +1159,4 @@ void KinematicVisualizer::updateSpectrogramColorScaleForRange(const QCPRange &vi
     m_spectrogramColorMap->setDataRange(QCPRange(lower, upper));
     customPlot->replot(QCustomPlot::rpQueuedReplot);
 }
+ 
