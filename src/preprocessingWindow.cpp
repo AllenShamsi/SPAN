@@ -118,6 +118,11 @@ preprocessingWindow::preprocessingWindow(QWidget *parent)
     bpFrontCombo = ui->bpFrontCombo;  // BP-F
     bpRightCombo = ui->bpRightCombo;  // BP-R
 
+    originCombo = ui->originCombo;
+    originCombo->clear();
+    originCombo->addItem("BP centroid", -1);
+    originCombo->setEnabled(false);
+
     auto initBpCombo = [this](QComboBox *combo) {
         if (!combo) return;
         combo->clear();
@@ -299,7 +304,7 @@ void preprocessingWindow::updateSensorsFromCheckboxes()
     }
 }
 
-// Rebuild BP role candidates from checked non-reference channels.
+// Rebuild BP role candidates from channels present in the bite-plane recording.
 void preprocessingWindow::refreshBpCombos()
 {
     struct Candidate {
@@ -310,22 +315,35 @@ void preprocessingWindow::refreshBpCombos()
     QVector<Candidate> candidates;
     const QSet<QString> refNames = {"REF-L", "REF-R", "REF-F"};
 
-    for (int i = 0; i < checkBoxes.size(); ++i) {
-        if (!checkBoxes[i]->isChecked())
-            continue;
+    // BP channels are chosen from the raw channels present in the
+    // bite-plane recording, independently of the trial-sensor selection.
+    for (int i = 0; i < static_cast<int>(bpSensorData.size()); ++i) {
+        const int channelIdx = i + 1;
 
-        const QString name = comboBoxes[i]->currentText().trimmed();
-        if (name == "Select" || name.isEmpty())
-            continue;
+        // If this channel is currently assigned as a head reference,
+        // do not offer it as a bite-plane channel.
+        if (i < checkBoxes.size() &&
+            checkBoxes[i]->isChecked()) {
 
-        // REF channels cannot be BP channels
-        if (refNames.contains(name))
-            continue;
+            const QString name = comboBoxes[i]->currentText().trimmed();
+            if (refNames.contains(name))
+                continue;
+        }
 
-        int channelIdx = i + 1;
         Candidate c;
         c.channel = channelIdx;
-        c.label = QString("ch %1: %2").arg(channelIdx).arg(name);
+
+        // Show an experimental label when one exists, but a label is
+        // not required for a dedicated bite-plane channel.
+        QString name;
+        if (i < comboBoxes.size() && checkBoxes[i]->isChecked())
+            name = comboBoxes[i]->currentText().trimmed();
+
+        if (!name.isEmpty() && name != "Select")
+            c.label = QString("ch %1: %2").arg(channelIdx).arg(name);
+        else
+            c.label = QString("ch %1").arg(channelIdx);
+
         candidates.push_back(c);
     }
 
@@ -333,19 +351,20 @@ void preprocessingWindow::refreshBpCombos()
         if (!combo)
             return;
 
-        int previousChannel = combo->currentData(Qt::UserRole).toInt();
+        const int previousChannel =
+            combo->currentData(Qt::UserRole).toInt();
 
         combo->blockSignals(true);
         combo->clear();
         combo->addItem("Select", -1);
-        for (const auto &c : candidates) {
+
+        for (const auto &c : candidates)
             combo->addItem(c.label, c.channel);
-        }
-        combo->blockSignals(false);
 
         if (previousChannel > 0) {
             for (int i = 0; i < combo->count(); ++i) {
-                if (combo->itemData(i, Qt::UserRole).toInt() == previousChannel) {
+                if (combo->itemData(i, Qt::UserRole).toInt() ==
+                    previousChannel) {
                     combo->setCurrentIndex(i);
                     break;
                 }
@@ -353,6 +372,7 @@ void preprocessingWindow::refreshBpCombos()
         }
 
         combo->setEnabled(combo->count() > 1);
+        combo->blockSignals(false);
     };
 
     repopulate(bpLeftCombo);
@@ -360,6 +380,54 @@ void preprocessingWindow::refreshBpCombos()
     repopulate(bpRightCombo);
 
     syncBpSensorsFromCombos();
+
+    // Rebuild coordinate-origin choices from all raw channels
+    // present in the bite-plane recording.
+    if (originCombo) {
+        const int previousOrigin =
+            originCombo->currentData(Qt::UserRole).toInt();
+
+        originCombo->blockSignals(true);
+        originCombo->clear();
+
+        // -1 preserves the original SPAN behavior.
+        originCombo->addItem("BP centroid", -1);
+
+        for (int i = 0; i < static_cast<int>(bpSensorData.size()); ++i) {
+            const int channelIdx = i + 1;
+            QString label = QString("ch %1").arg(channelIdx);
+
+            // Show the user-assigned label when available.
+            if (i < comboBoxes.size() &&
+                i < checkBoxes.size() &&
+                checkBoxes[i]->isChecked()) {
+
+                const QString name =
+                    comboBoxes[i]->currentText().trimmed();
+
+                if (!name.isEmpty() && name != "Select")
+                    label += QString(": %1").arg(name);
+            }
+
+            originCombo->addItem(label, channelIdx);
+        }
+
+        // Restore the previous choice when possible.
+        int restoreIndex = 0; // centroid
+        if (previousOrigin > 0) {
+            for (int i = 0; i < originCombo->count(); ++i) {
+                if (originCombo->itemData(i, Qt::UserRole).toInt()
+                    == previousOrigin) {
+                    restoreIndex = i;
+                    break;
+                }
+            }
+        }
+
+        originCombo->setCurrentIndex(restoreIndex);
+        originCombo->setEnabled(!bpSensorData.empty());
+        originCombo->blockSignals(false);
+    }
 }
 
 void preprocessingWindow::syncBpSensorsFromCombos()
@@ -429,6 +497,11 @@ void preprocessingWindow::pushButton2Clicked()
     }
 
     biteplate.setPosPath(fileName.toStdString());
+
+    // Read the bite-plane recording now so that the BP-L/BP-F/BP-R
+    // selectors can be populated from its actual raw channels.
+    bpSensorData = readPosFile(biteplate.getPosPath());
+    refreshBpCombos();
 
     QStandardItem *item = new QStandardItem(fileInfo.fileName());
     item->setData(fileName, Qt::UserRole);
@@ -692,8 +765,26 @@ void preprocessingWindow::initializeOcclusalCorrectionModel(const std::vector<ch
     if (bpFKey != -1) bpIdx.push_back(bpFKey - 1);
     if (bpRKey != -1) bpIdx.push_back(bpRKey - 1);
 
-    correctionModel = buildOcclusalCorrectionModel(bitePlaneData, refIdx, bpIdx);
-    bpSensorData = applyOcclusalCorrection(correctionModel, bitePlaneData, refIdx);
+    int originIdx = -1; // default: bite-plane centroid
+
+    if (originCombo) {
+        const int originChannel =
+            originCombo->currentData(Qt::UserRole).toInt();
+
+        if (originChannel > 0)
+            originIdx = originChannel - 1; // convert to zero-based index
+    }
+
+    correctionModel =
+        buildOcclusalCorrectionModel(bitePlaneData,
+                                     refIdx,
+                                     bpIdx,
+                                     originIdx);
+
+    bpSensorData =
+        applyOcclusalCorrection(correctionModel,
+                                bitePlaneData,
+                                refIdx);
 }
 
 
@@ -1215,8 +1306,9 @@ void preprocessingWindow::writeHeader(std::ofstream &outFile,
     }
 
     outFile << "0:audio ";
+    int outputChannel = 1;
     for (auto it = sensorLabels.begin(); it != sensorLabels.end(); ++it) {
-        outFile << it.key() << ":" << it.value().toStdString() << " ";
+        outFile << outputChannel++ << ":" << it.value().toStdString() << " ";
     }
     outFile << "\n";
 
@@ -1415,9 +1507,9 @@ QString preprocessingWindow::buildHelpHtml() const
         to the head-reference sensors and which correspond to the articulatory sensors of interest.
         </p>
 
-        <h3>3. Assign bite-plane channels</h3>
+        <h3>3. Assign bite-plane channels and coordinate origin</h3>
         <ul>
-          <li>Use the bite-plane mapping controls to assign three checked non-reference channels to:
+          <li>Use the bite-plane mapping controls to assign three raw channels from the bite-plane recording to:
             <ul>
               <li><code>BP-L</code></li>
               <li><code>BP-F</code></li>
@@ -1425,14 +1517,14 @@ QString preprocessingWindow::buildHelpHtml() const
             </ul>
           </li>
           <li>These must be three different channels.</li>
-          <li>These channels define the participant-specific occlusal frame used during correction.</li>
+          <li>The bite-plane channels are selected independently of the experimental channels and do not need to be retained for trial export.</li>
+          <li>Use the <b>Origin</b> control to choose the coordinate origin. The default is the centroid of BP-L, BP-F, and BP-R; alternatively, any raw sensor present in the bite-plane recording can be selected as the origin.</li>
         </ul>
-
         <p>
-        SPAN computes the canonical coordinate system from the bite-plane geometry:
-        <code>BP-L</code> and <code>BP-R</code> define the lateral axis,
-        <code>BP-F</code> defines the anterior direction together with the left-right midpoint,
-        and the origin is set to the centroid of <code>BP-L</code>, <code>BP-F</code>, and <code>BP-R</code>.
+        SPAN computes the orientation of the canonical coordinate system from the bite-plane geometry:
+        <code>BP-L</code> and <code>BP-R</code> define the lateral axis, and
+        <code>BP-F</code> defines the anterior direction together with the left-right midpoint.
+        The coordinate origin is defined either by the bite-plane centroid or by the user-selected sensor.
         The reference sensors are then expressed in that canonical frame and used as the target
         configuration for frame-by-frame correction of the bite-plane and trial recordings.
         </p>
@@ -1546,7 +1638,7 @@ QString preprocessingWindow::buildHelpHtml() const
           <li>Check and label the raw channels.</li>
           <li>Confirm that the three reference channels are labeled
               <code>REF-L</code>, <code>REF-R</code>, and <code>REF-F</code>.</li>
-          <li>Assign <code>BP-L</code>, <code>BP-F</code>, and <code>BP-R</code>.</li>
+          <li>Assign <code>BP-L</code>, <code>BP-F</code>, and <code>BP-R</code>, and select the desired coordinate origin.</li>
           <li>Click <b>Start</b> and inspect the corrected bite-plane preview.</li>
           <li>Click <b>Proceed</b> once and inspect the corrected trial preview.</li>
           <li>Click <b>Proceed</b> again to export all corrected files.</li>
@@ -1604,9 +1696,14 @@ void preprocessingWindow::setupTooltips()
     }
 
     // Bite-plane role mapping
-    tt(bpLeftCombo,  "Assign one checked channel to BP-L.");
-    tt(bpFrontCombo, "Assign one checked channel to BP-F.");
-    tt(bpRightCombo, "Assign one checked channel to BP-R.");
+    tt(bpLeftCombo,  "Select the raw bite-plane channel containing BP-L.");
+    tt(bpFrontCombo, "Select the raw bite-plane channel containing BP-F.");
+    tt(bpRightCombo, "Select the raw bite-plane channel containing BP-R.");
+
+    tt(originCombo,
+       "Choose the coordinate origin. BP centroid preserves the original "
+       "SPAN behavior; alternatively, select a raw sensor such as an "
+       "upper-incisor reference when appropriate.");
 
     // Control buttons
     tt(ui->startButton,
