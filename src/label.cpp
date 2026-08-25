@@ -37,25 +37,58 @@ Label::Label(QCustomPlot *plot)
                 return;
             }
 
-            const bool isSingleChannel = (countTrailingLowerCase(legendName) == 1);
+            const int dimCount = countTrailingLowerCase(legendName);
+            const bool isSingleChannel = (dimCount == 1);
 
-            if (!isSingleChannel) {
+            const bool startsWithDerivedParameter =
+                legendName.startsWith(QLatin1Char('v')) ||
+                legendName.startsWith(QLatin1Char('a')) ||
+                legendName.startsWith(QLatin1Char('i'));
+
+            const bool isTwoDimensionalGesture =
+                (dimCount == 2 && !startsWithDerivedParameter);
+
+            // One dimension: old behavior.
+            // Two dimensions: new tangential gesture behavior.
+            // Three dimensions or anything else: manual label only for now.
+            if (!isSingleChannel && !isTwoDimensionalGesture) {
                 placeLabelAt(clickedX, QString());
                 return;
             }
 
-            // Snap to nearest extremum in this graph
-            const double nearestX = findNearestPeak(clickedX, legendName);
-            placeLabelAt(nearestX, QStringLiteral("MaxC"));
-
             if (auto *mw = qobject_cast<mainWindow*>(m_plot->window())) {
-                std::vector<double> velocityData = mw->getPrecomputedVelocity(legendName);
-                if (!velocityData.empty()) {
-                    const double sr = mw->getCurrentSpanWavSR();
+                const double sr = mw->getCurrentSpanWavSR();
 
+                std::vector<double> velocityData;
+                double centerX = clickedX;
+
+                if (isSingleChannel) {
+                    // Existing behavior:
+                    // snap MaxC to the nearest visible displacement extremum,
+                    // then use the matching signed single-axis velocity.
+                    centerX = findNearestPeak(clickedX, legendName);
+                    velocityData = mw->getPrecomputedVelocity(legendName);
+                } else {
+                    // New behavior for TTxz / TTxy / TTyz:
+                    // keep the visible position traces, but use hidden tangential speed
+                    // as the gesture-finding basis.
+                    velocityData = mw->getPrecomputedTangentialVelocity(legendName);
+
+                    if (!velocityData.empty())
+                        centerX = findNearestVelocityMinimum(clickedX, velocityData, sr);
+                }
+
+                placeLabelAt(centerX, QStringLiteral("MaxC"));
+
+                if (!velocityData.empty()) {
                     landmarks lm;
-                    findPrecedingVelocityExtremumFromVector(lm, nearestX, velocityData, sr);
-                    findFollowingVelocityExtremumFromVector (lm, nearestX, velocityData, sr);
+
+                    if (isTwoDimensionalGesture) {
+                        findTangentialGestureLandmarksFromSpeed(lm, centerX, velocityData, sr);
+                    } else {
+                        findPrecedingVelocityExtremumFromVector(lm, centerX, velocityData, sr);
+                        findFollowingVelocityExtremumFromVector (lm, centerX, velocityData, sr);
+                    }
 
                     if (std::isfinite(lm.GONS))  placeLabelAt(lm.GONS,  QStringLiteral("GONS"));
                     if (std::isfinite(lm.NONS))  placeLabelAt(lm.NONS,  QStringLiteral("NONS"));
@@ -63,10 +96,9 @@ Label::Label(QCustomPlot *plot)
                     if (std::isfinite(lm.PVEL2)) emit landmarkAdded(legendName, lm.PVEL2, QStringLiteral("PVEL2"));
                     if (std::isfinite(lm.NOFFS)) placeLabelAt(lm.NOFFS, QStringLiteral("NOFFS"));
                     if (std::isfinite(lm.GOFFS)) placeLabelAt(lm.GOFFS, QStringLiteral("GOFFS"));
-                } else {
-                    placeLabelAt(nearestX, QString());
                 }
             }
+
             return;
         }
 
@@ -89,6 +121,37 @@ Label::Label(QCustomPlot *plot)
 }
 
 namespace {
+inline bool crossesUpInclusive(double y0, double y1, double threshold)
+{
+    return (y0 <= threshold && y1 >  threshold) ||
+           (y0 <  threshold && y1 >= threshold);
+}
+
+inline bool crossesDownInclusive(double y0, double y1, double threshold)
+{
+    return (y0 >= threshold && y1 <  threshold) ||
+           (y0 >  threshold && y1 <= threshold);
+}
+
+inline double interpolateThresholdCrossing(int i0,
+                                           int i1,
+                                           double y0,
+                                           double y1,
+                                           double threshold,
+                                           double sr)
+{
+    const double t0 = i0 / sr;
+    const double t1 = i1 / sr;
+
+    if (!std::isfinite(y0) || !std::isfinite(y1) || sr <= 0.0)
+        return std::numeric_limits<double>::quiet_NaN();
+
+    if (std::fabs(y1 - y0) < 1e-12)
+        return t0;
+
+    const double frac = (threshold - y0) / (y1 - y0);
+    return t0 + frac * (t1 - t0);
+}
 inline bool plotHasItem(QCustomPlot* plot, QCPAbstractItem* it) {
     if (!plot || !it) return false;
     const int n = plot->itemCount();
@@ -117,11 +180,92 @@ void Label::setReopeningDeadbandFraction(double value)
 int Label::countTrailingLowerCase(const QString &str)
 {
     int count = 0;
+
     for (int i = str.size() - 1; i >= 0; --i) {
-        if (str[i].isLower()) ++count;
-        else break;
+        const QChar c = str.at(i).toLower();
+
+        if (c == QLatin1Char('x') ||
+            c == QLatin1Char('y') ||
+            c == QLatin1Char('z'))
+        {
+            ++count;
+        } else {
+            break;
+        }
     }
+
     return count;
+}
+
+double Label::findNearestVelocityMinimum(double xClicked,
+                                         const std::vector<double> &velocityData,
+                                         double sr) const
+{
+    if (velocityData.size() < 3 || sr <= 0.0 || !std::isfinite(xClicked))
+        return xClicked;
+
+    const int N = static_cast<int>(velocityData.size());
+
+    int clickedIndex = static_cast<int>(std::round(xClicked * sr));
+    clickedIndex = std::max(1, std::min(clickedIndex, N - 2));
+
+    // Search within 25% of the visible window.
+    // This keeps MaxC near the user click rather than jumping to an unrelated valley.
+    int searchRadius =
+        static_cast<int>(std::round(0.25 * m_plot->xAxis->range().size() * sr));
+
+    if (searchRadius <= 0)
+        searchRadius = static_cast<int>(std::round(0.25 * sr)); // fallback: 250 ms
+
+    const int start = std::max(1, clickedIndex - searchRadius);
+    const int end   = std::min(N - 2, clickedIndex + searchRadius);
+
+    bool haveLocalMin = false;
+    int bestIndex = clickedIndex;
+    double bestDistance = std::numeric_limits<double>::max();
+
+    for (int i = start; i <= end; ++i) {
+        const double prevVal = velocityData[static_cast<size_t>(i - 1)];
+        const double currVal = velocityData[static_cast<size_t>(i)];
+        const double nextVal = velocityData[static_cast<size_t>(i + 1)];
+
+        if (!std::isfinite(prevVal) ||
+            !std::isfinite(currVal) ||
+            !std::isfinite(nextVal))
+            continue;
+
+        const bool isLocalMinimum = (currVal <= prevVal && currVal <= nextVal);
+        if (!isLocalMinimum)
+            continue;
+
+        const double d = std::fabs(static_cast<double>(i - clickedIndex));
+
+        if (!haveLocalMin || d < bestDistance) {
+            haveLocalMin = true;
+            bestDistance = d;
+            bestIndex = i;
+        }
+    }
+
+    if (haveLocalMin)
+        return bestIndex / sr;
+
+    // Fallback: choose the lowest-speed sample in the local window.
+    double bestValue = std::numeric_limits<double>::max();
+
+    for (int i = start; i <= end; ++i) {
+        const double v = velocityData[static_cast<size_t>(i)];
+
+        if (!std::isfinite(v))
+            continue;
+
+        if (v < bestValue) {
+            bestValue = v;
+            bestIndex = i;
+        }
+    }
+
+    return bestIndex / sr;
 }
 
 bool Label::isHandle(const QCPItemText* item) const
@@ -434,44 +578,46 @@ void Label::findPrecedingVelocityExtremumFromVector(Label::landmarks &lm,
     // 5) GONS: first time before PVEL1 where velocity crosses threshold upward.
     double gons = std::numeric_limits<double>::quiet_NaN();
 
-    for (int i = pvelIndex; i >= 1; --i) {
+    for (int i = pvelIndex; i >= searchStart + 1; --i) {
         const double prevNorm = vNorm(i - 1);
         const double currNorm = vNorm(i);
 
         if (!std::isfinite(prevNorm) || !std::isfinite(currNorm))
             continue;
 
-        if (prevNorm < threshold && currNorm >= threshold) {
-            const double t1 = (i - 1) / sr;
-            const double t2 = i / sr;
-            const double frac = (threshold - prevNorm) / (currNorm - prevNorm);
-            gons = t1 + frac * (t2 - t1);
+        if (crossesUpInclusive(prevNorm, currNorm, threshold)) {
+            gons = interpolateThresholdCrossing(i - 1, i,
+                                                prevNorm, currNorm,
+                                                threshold, sr);
             break;
         }
     }
 
-    lm.GONS = gons;
+    // Fallback: if PVEL1 exists but no clean threshold crossing was found,
+    // still place GONS at the left edge of the local pre-MaxC search window.
+    lm.GONS = std::isfinite(gons) ? gons : (searchStart / sr);
 
     // 6) NONS: first time after PVEL1 where velocity crosses threshold downward.
     double nons = std::numeric_limits<double>::quiet_NaN();
 
-    for (int i = pvelIndex; i < N - 1; ++i) {
+    for (int i = pvelIndex; i < nearestIndex; ++i) {
         const double currNorm = vNorm(i);
         const double nextNorm = vNorm(i + 1);
 
         if (!std::isfinite(currNorm) || !std::isfinite(nextNorm))
             continue;
 
-        if (currNorm >= threshold && nextNorm < threshold) {
-            const double t1 = i / sr;
-            const double t2 = (i + 1) / sr;
-            const double frac = (threshold - currNorm) / (nextNorm - currNorm);
-            nons = t1 + frac * (t2 - t1);
+        if (crossesDownInclusive(currNorm, nextNorm, threshold)) {
+            nons = interpolateThresholdCrossing(i, i + 1,
+                                                currNorm, nextNorm,
+                                                threshold, sr);
             break;
         }
     }
 
-    lm.NONS = nons;
+    // Fallback: if PVEL1 exists but no clean target-onset crossing was found,
+    // place NONS at MaxC.
+    lm.NONS = std::isfinite(nons) ? nons : xCenterSec;
 }
 
 void Label::findFollowingVelocityExtremumFromVector(Label::landmarks &lm,
@@ -621,48 +767,376 @@ void Label::findFollowingVelocityExtremumFromVector(Label::landmarks &lm,
     // 5) NOFFS: first time between MaxC and PVEL2 where v crosses +threshold upward
     //    (acceleration away from the target, out of the constriction).
     double noffs = std::numeric_limits<double>::quiet_NaN();
-    int start = std::max(nearestIndex, 1);   // stay in-bounds and at/after MaxC
+
+    const int start = std::max(nearestIndex, 1);
+
     if (pvelIndex > start) {
         for (int i = start; i < pvelIndex; ++i) {
             if (i + 1 >= N)
                 break;
 
-            double currNorm = vNorm(i);
-            double nextNorm = vNorm(i + 1);
+            const double currNorm = vNorm(i);
+            const double nextNorm = vNorm(i + 1);
+
             if (!std::isfinite(currNorm) || !std::isfinite(nextNorm))
                 continue;
 
-            // Crossing from < 0.2*PVEL2 up to >= 0.2*PVEL2
-            if (currNorm < threshold && nextNorm >= threshold) {
-                double t1   = i / sr;
-                double t2   = (i + 1) / sr;
-                double frac = (threshold - currNorm) / (nextNorm - currNorm);
-                noffs = t1 + frac * (t2 - t1);
+            if (crossesUpInclusive(currNorm, nextNorm, threshold)) {
+                noffs = interpolateThresholdCrossing(i, i + 1,
+                                                     currNorm, nextNorm,
+                                                     threshold, sr);
                 break;
             }
         }
     }
-    lm.NOFFS = noffs;
+
+    // Fallback: if PVEL2 exists but no clean release-onset crossing was found,
+    // place NOFFS at MaxC.
+    lm.NOFFS = std::isfinite(noffs) ? noffs : xCenterSec;
 
     // 6) GOFFS: first time after PVEL2 where v crosses +threshold downward
     //    (deceleration away from the target).
     double goffs = std::numeric_limits<double>::quiet_NaN();
+
     for (int i = pvelIndex; i < N - 1; ++i) {
-        double currNorm = vNorm(i);
-        double nextNorm = vNorm(i + 1);
+        const double currNorm = vNorm(i);
+        const double nextNorm = vNorm(i + 1);
+
         if (!std::isfinite(currNorm) || !std::isfinite(nextNorm))
             continue;
 
-        // Crossing from > 0.2*PVEL2 down to <= 0.2*PVEL2
-        if (currNorm > threshold && nextNorm <= threshold) {
-            double t1   = i / sr;
-            double t2   = (i + 1) / sr;
-            double frac = (threshold - currNorm) / (nextNorm - currNorm);
-            goffs = t1 + frac * (t2 - t1);
+        if (crossesDownInclusive(currNorm, nextNorm, threshold)) {
+            goffs = interpolateThresholdCrossing(i, i + 1,
+                                                 currNorm, nextNorm,
+                                                 threshold, sr);
             break;
         }
     }
-    lm.GOFFS = goffs;
+
+    // Fallback: if PVEL2 exists but no clean gesture-offset crossing was found,
+    // place GOFFS at the end of the signal.
+    lm.GOFFS = std::isfinite(goffs) ? goffs : ((N - 1) / sr);
+}
+
+void Label::findTangentialGestureLandmarksFromSpeed(Label::landmarks &lm,
+                                                    double xCenterSec,
+                                                    const std::vector<double> &speedData,
+                                                    double sr)
+{
+    lm.MaxC = xCenterSec;
+
+    if (!std::isfinite(xCenterSec) || speedData.size() < 5 || sr <= 0.0)
+        return;
+
+    const int N = static_cast<int>(speedData.size());
+
+    int centerIndex = static_cast<int>(std::round(xCenterSec * sr));
+    centerIndex = std::max(2, std::min(centerIndex, N - 3));
+
+    auto finiteSpeed = [&](int idx) -> double {
+        if (idx < 0 || idx >= N)
+            return std::numeric_limits<double>::quiet_NaN();
+
+        const double v = speedData[static_cast<size_t>(idx)];
+        return std::isfinite(v) ? v : std::numeric_limits<double>::quiet_NaN();
+    };
+
+    auto isLocalMax = [&](int idx) -> bool {
+        const double prev = finiteSpeed(idx - 1);
+        const double curr = finiteSpeed(idx);
+        const double next = finiteSpeed(idx + 1);
+
+        if (!std::isfinite(prev) ||
+            !std::isfinite(curr) ||
+            !std::isfinite(next))
+            return false;
+
+        return curr >= prev && curr >= next &&
+               (curr > prev || curr > next);
+    };
+
+    auto interpolateCrossing = [&](int i0, int i1, double threshold) -> double {
+        const double y0 = finiteSpeed(i0);
+        const double y1 = finiteSpeed(i1);
+
+        const double t0 = i0 / sr;
+        const double t1 = i1 / sr;
+
+        if (!std::isfinite(y0) || !std::isfinite(y1))
+            return std::numeric_limits<double>::quiet_NaN();
+
+        if (std::fabs(y1 - y0) < 1e-12)
+            return t0;
+
+        const double frac = (threshold - y0) / (y1 - y0);
+        return t0 + frac * (t1 - t0);
+    };
+
+    const double centerSpeed = finiteSpeed(centerIndex);
+
+    if (!std::isfinite(centerSpeed))
+        return;
+
+    // Limit how far the algorithm is allowed to look away from MaxC.
+    // The goal is to find the adjacent closing/opening peaks, not a later
+    // unrelated movement.
+    double searchSec = 0.30;
+
+    if (m_plot && m_plot->xAxis) {
+        const double visibleRange = m_plot->xAxis->range().size();
+
+        if (visibleRange > 0.0) {
+            searchSec = 0.25 * visibleRange;
+            searchSec = std::max(0.12, std::min(searchSec, 0.30));
+        }
+    }
+
+    const int searchSamples =
+        std::max(5, static_cast<int>(std::round(searchSec * sr)));
+
+    const int leftBound  = std::max(1, centerIndex - searchSamples);
+    const int rightBound = std::min(N - 2, centerIndex + searchSamples);
+
+    // Estimate how large a speed rise is available on each side.
+    // This is used only to reject tiny wiggles close to MaxC.
+    double leftMax = centerSpeed;
+    for (int i = centerIndex - 1; i >= leftBound; --i) {
+        const double v = finiteSpeed(i);
+        if (std::isfinite(v))
+            leftMax = std::max(leftMax, v);
+    }
+
+    double rightMax = centerSpeed;
+    for (int i = centerIndex + 1; i <= rightBound; ++i) {
+        const double v = finiteSpeed(i);
+        if (std::isfinite(v))
+            rightMax = std::max(rightMax, v);
+    }
+
+    if (leftMax <= centerSpeed || rightMax <= centerSpeed)
+        return;
+
+    // A candidate PVEL must rise at least this much above the MaxC low-speed
+    // region. This rejects tiny local bumps.
+    //
+    // m_velocityThresholdFraction is already 0.20 by default.
+    const double minLeftPeak =
+        centerSpeed + m_velocityThresholdFraction * (leftMax - centerSpeed);
+
+    const double minRightPeak =
+        centerSpeed + m_velocityThresholdFraction * (rightMax - centerSpeed);
+
+    // ------------------------------------------------------------
+    // PVEL1: first strong local maximum immediately before MaxC.
+    // Scan outward from MaxC to the left. The first qualified peak is the
+    // adjacent closing peak. Do NOT choose the strongest peak in the whole window.
+    // ------------------------------------------------------------
+
+    int pvel1Index = -1;
+
+    for (int i = centerIndex - 1; i >= leftBound + 1; --i) {
+        const double curr = finiteSpeed(i);
+
+        if (!std::isfinite(curr))
+            continue;
+
+        if (isLocalMax(i) && curr >= minLeftPeak) {
+            pvel1Index = i;
+            break;
+        }
+    }
+
+    // Fallback: if smoothing creates a shoulder/plateau without a formal local max,
+    // choose the highest point in the first rising excursion before MaxC.
+    if (pvel1Index < 0) {
+        bool inExcursion = false;
+        int bestIdx = -1;
+        double bestVal = -std::numeric_limits<double>::infinity();
+
+        for (int i = centerIndex - 1; i >= leftBound; --i) {
+            const double curr = finiteSpeed(i);
+
+            if (!std::isfinite(curr))
+                continue;
+
+            if (!inExcursion) {
+                if (curr >= minLeftPeak)
+                    inExcursion = true;
+                else
+                    continue;
+            }
+
+            if (curr > bestVal) {
+                bestVal = curr;
+                bestIdx = i;
+            }
+
+            // Once we have passed back below the minimum required peak height,
+            // stop; this keeps the fallback in the adjacent excursion.
+            if (inExcursion && curr < minLeftPeak && bestIdx >= 0)
+                break;
+        }
+
+        pvel1Index = bestIdx;
+    }
+
+    // ------------------------------------------------------------
+    // PVEL2: first strong local maximum immediately after MaxC.
+    // Scan outward from MaxC to the right.
+    // ------------------------------------------------------------
+
+    int pvel2Index = -1;
+
+    for (int i = centerIndex + 1; i <= rightBound - 1; ++i) {
+        const double curr = finiteSpeed(i);
+
+        if (!std::isfinite(curr))
+            continue;
+
+        if (isLocalMax(i) && curr >= minRightPeak) {
+            pvel2Index = i;
+            break;
+        }
+    }
+
+    // Fallback for shoulder/plateau data.
+    if (pvel2Index < 0) {
+        bool inExcursion = false;
+        int bestIdx = -1;
+        double bestVal = -std::numeric_limits<double>::infinity();
+
+        for (int i = centerIndex + 1; i <= rightBound; ++i) {
+            const double curr = finiteSpeed(i);
+
+            if (!std::isfinite(curr))
+                continue;
+
+            if (!inExcursion) {
+                if (curr >= minRightPeak)
+                    inExcursion = true;
+                else
+                    continue;
+            }
+
+            if (curr > bestVal) {
+                bestVal = curr;
+                bestIdx = i;
+            }
+
+            if (inExcursion && curr < minRightPeak && bestIdx >= 0)
+                break;
+        }
+
+        pvel2Index = bestIdx;
+    }
+
+    if (pvel1Index < 0 || pvel2Index < 0)
+        return;
+
+    const double pvel1Value = finiteSpeed(pvel1Index);
+    const double pvel2Value = finiteSpeed(pvel2Index);
+
+    if (!std::isfinite(pvel1Value) || !std::isfinite(pvel2Value))
+        return;
+
+    lm.PVEL1 = pvel1Index / sr;
+    lm.PVEL2 = pvel2Index / sr;
+
+    // Thresholds for target/release around the low-speed MaxC region.
+    // For tangential speed, the baseline is centerSpeed, not zero.
+    const double threshold1 =
+        centerSpeed + m_velocityThresholdFraction * (pvel1Value - centerSpeed);
+
+    const double threshold2 =
+        centerSpeed + m_velocityThresholdFraction * (pvel2Value - centerSpeed);
+
+    // ------------------------------------------------------------
+    // GONS: crossing upward before PVEL1.
+    // ------------------------------------------------------------
+
+    for (int i = pvel1Index; i > leftBound; --i) {
+        const double prev = finiteSpeed(i - 1);
+        const double curr = finiteSpeed(i);
+
+        if (!std::isfinite(prev) || !std::isfinite(curr))
+            continue;
+
+        if (crossesUpInclusive(prev, curr, threshold1)) {
+            lm.GONS = interpolateCrossing(i - 1, i, threshold1);
+            break;
+        }
+    }
+
+    // Fallback: if both PVELs were found but no clean GONS crossing was found,
+    // place GONS at the left edge of the local search window.
+    if (!std::isfinite(lm.GONS))
+        lm.GONS = leftBound / sr;
+
+    // ------------------------------------------------------------
+    // NONS/TAR: crossing downward after PVEL1 toward MaxC.
+    // ------------------------------------------------------------
+
+    for (int i = pvel1Index; i < centerIndex; ++i) {
+        const double curr = finiteSpeed(i);
+        const double next = finiteSpeed(i + 1);
+
+        if (!std::isfinite(curr) || !std::isfinite(next))
+            continue;
+
+        if (crossesDownInclusive(curr, next, threshold1)) {
+            lm.NONS = interpolateCrossing(i, i + 1, threshold1);
+            break;
+        }
+    }
+
+    // Fallback: if no clean NONS crossing was found,
+    // place NONS at MaxC.
+    if (!std::isfinite(lm.NONS))
+        lm.NONS = xCenterSec;
+
+    // ------------------------------------------------------------
+    // NOFFS/REL: crossing upward after MaxC before PVEL2.
+    // ------------------------------------------------------------
+
+    for (int i = centerIndex; i < pvel2Index; ++i) {
+        const double curr = finiteSpeed(i);
+        const double next = finiteSpeed(i + 1);
+
+        if (!std::isfinite(curr) || !std::isfinite(next))
+            continue;
+
+        if (crossesUpInclusive(curr, next, threshold2)) {
+            lm.NOFFS = interpolateCrossing(i, i + 1, threshold2);
+            break;
+        }
+    }
+
+    // Fallback: if no clean NOFFS crossing was found,
+    // place NOFFS at MaxC.
+    if (!std::isfinite(lm.NOFFS))
+        lm.NOFFS = xCenterSec;
+
+    // ------------------------------------------------------------
+    // GOFFS/OFS: crossing downward after PVEL2.
+    // ------------------------------------------------------------
+
+    for (int i = pvel2Index; i < rightBound; ++i) {
+        const double curr = finiteSpeed(i);
+        const double next = finiteSpeed(i + 1);
+
+        if (!std::isfinite(curr) || !std::isfinite(next))
+            continue;
+
+        if (crossesDownInclusive(curr, next, threshold2)) {
+            lm.GOFFS = interpolateCrossing(i, i + 1, threshold2);
+            break;
+        }
+    }
+
+    // Fallback: if both PVELs were found but no clean GOFFS crossing was found,
+    // place GOFFS at the right edge of the local search window.
+    if (!std::isfinite(lm.GOFFS))
+        lm.GOFFS = rightBound / sr;
 }
 
 void Label::placeLabelAt(double x, QString labelName)
@@ -670,21 +1144,12 @@ void Label::placeLabelAt(double x, QString labelName)
 
     if (!m_plot) return;
 
-    static const double DUPLICATE_EPSILON = 1e-6;
-    for (auto *existingLine : m_labelLines) {
-        const double existingX = existingLine->start->coords().x();
-        if (qAbs(existingX - x) < DUPLICATE_EPSILON) return;
-    }
-
     if (m_plot->property("isSpectrogram").toBool())
         return;
 
-    QCPItemLine *labelLine = new QCPItemLine(m_plot);
-    labelLine->setPen(QPen(Qt::black));
-    labelLine->start->setCoords(x, m_plot->yAxis->range().lower);
-    labelLine->end  ->setCoords(x, m_plot->yAxis->range().upper);
-    labelLine->setSelectable(true);
-    m_labelLines.append(labelLine);
+    QString legendName = (m_plot->graphCount() > 0 && !m_plot->graph(0)->name().isEmpty())
+                             ? m_plot->graph(0)->name()
+                             : QStringLiteral("Landmark");
 
     if (labelName.isEmpty()) {
         if (auto *mw = qobject_cast<mainWindow*>(m_plot->window())) {
@@ -693,6 +1158,37 @@ void Label::placeLabelAt(double x, QString labelName)
             mw->incrementGlobalNameCounter();
         }
     }
+
+    static const double DUPLICATE_EPSILON = 1e-6;
+
+    for (auto *existingLine : m_labelLines) {
+        if (!existingLine)
+            continue;
+
+        const double existingX = existingLine->start->coords().x();
+
+        const QString existingLegend =
+            m_labelLineLegendMap.value(existingLine);
+
+        const QString existingName =
+            m_labelLineNameMap.value(existingLine);
+
+        // Only reject the exact same landmark on the same channel.
+        // Different landmarks are allowed to share the same timestamp.
+        if (existingLegend == legendName &&
+            existingName == labelName &&
+            qAbs(existingX - x) < DUPLICATE_EPSILON)
+        {
+            return;
+        }
+    }
+
+    QCPItemLine *labelLine = new QCPItemLine(m_plot);
+    labelLine->setPen(QPen(Qt::black));
+    labelLine->start->setCoords(x, m_plot->yAxis->range().lower);
+    labelLine->end  ->setCoords(x, m_plot->yAxis->range().upper);
+    labelLine->setSelectable(true);
+    m_labelLines.append(labelLine);
     m_labelLineNameMap[labelLine] = labelName;
 
     QCPItemText *labelText = new QCPItemText(m_plot);
@@ -719,14 +1215,8 @@ void Label::placeLabelAt(double x, QString labelName)
 
     m_labelHandleMapText[handleText] = labelLine;
     m_lineToBottomText[labelLine]    = labelText;
-
-    QString legendName = (m_plot->graphCount() > 0 && !m_plot->graph(0)->name().isEmpty())
-                             ? m_plot->graph(0)->name()
-                             : QStringLiteral("Landmark");
     m_labelLineLegendMap[labelLine] = legendName;
-
     emit landmarkAdded(legendName, x, labelName);
-
     m_plot->replot();
 }
 
