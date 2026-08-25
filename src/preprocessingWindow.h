@@ -150,6 +150,7 @@ private:
     QComboBox *bpLeftCombo  = nullptr;   // BP-L
     QComboBox *bpFrontCombo = nullptr;   // BP-F
     QComboBox *bpRightCombo = nullptr;   // BP-R
+    QComboBox *originCombo = nullptr;    // origin
 
     QMap<int, QString> previousSelections;
 
