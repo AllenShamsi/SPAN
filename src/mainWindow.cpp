@@ -846,6 +846,92 @@ static inline QString baseSensorName(QString s)
     return s.trimmed();
 }
 
+static inline int selectedAxisCount(bool x, bool y, bool z)
+{
+    int n = 0;
+    if (x) ++n;
+    if (y) ++n;
+    if (z) ++n;
+    return n;
+}
+
+static inline bool isTwoDimensionalDisplacementGestureConfig(const SensorConfig &cfg)
+{
+    return cfg.param == motionParam::Displacement &&
+           selectedAxisCount(cfg.x, cfg.y, cfg.z) == 2;
+}
+
+static inline double componentFromPosData(const posData &p, QChar axis)
+{
+    axis = axis.toLower();
+
+    if (axis == QLatin1Char('x')) return p.x;
+    if (axis == QLatin1Char('y')) return p.y;
+    if (axis == QLatin1Char('z')) return p.z;
+
+    return std::numeric_limits<double>::quiet_NaN();
+}
+
+static inline QString axisSuffixFromConfigName(QString s)
+{
+    s = s.trimmed();
+
+    QString suffix;
+
+    while (!s.isEmpty() && suffix.size() < 3) {
+        const QChar c = s.at(s.size() - 1).toLower();
+
+        if (c == QLatin1Char('x') ||
+            c == QLatin1Char('y') ||
+            c == QLatin1Char('z'))
+        {
+            suffix.prepend(c);
+            s.chop(1);
+        } else {
+            break;
+        }
+    }
+
+    return suffix;
+}
+
+static inline bool isTwoDimensionalDisplacementGestureConfigName(const QString &configName)
+{
+    const QString s = configName.trimmed();
+
+    if (s.isEmpty())
+        return false;
+
+    const QString dims = axisSuffixFromConfigName(s);
+
+    if (dims.size() != 2)
+        return false;
+
+    const QChar first = s.at(0);
+
+    if (first == QLatin1Char('v') ||
+        first == QLatin1Char('V') ||
+        first == QLatin1Char('a') ||
+        first == QLatin1Char('A') ||
+        first == QLatin1Char('i') ||
+        first == QLatin1Char('I'))
+    {
+        return false;
+    }
+
+    return true;
+}
+
+static inline QString basisChannelNameForConfig(const QString &configName)
+{
+    const QString base = baseSensorName(configName);
+
+    if (base.isEmpty())
+        return QStringLiteral("vtan");
+
+    return QStringLiteral("v%1tan").arg(base);
+}
+
 // Resolve configured channel name -> index in channelsData and extract a 1D scalar series
 // consistent with the SensorConfig (dimension-aware).
 static bool extractScalarSeriesForConfig(const spanFile &data,
@@ -858,26 +944,71 @@ static bool extractScalarSeriesForConfig(const spanFile &data,
         data.sensors.begin(), data.sensors.end(),
         [&baseConfigName, &cfg](const std::pair<int, std::string> &sensor) {
             const QString s = QString::fromStdString(sensor.second).trimmed();
-            return s == baseConfigName.trimmed() || s == cfg.name.trimmed();
+            return s.compare(baseConfigName.trimmed(), Qt::CaseInsensitive) == 0 ||
+                   s.compare(cfg.name.trimmed(), Qt::CaseInsensitive) == 0;
         });
 
     if (it == data.sensors.end())
         return false;
 
     int channelIndex = it->first - 1;
+
     if (channelIndex < 0 ||
         channelIndex >= static_cast<int>(data.channelsData.size()))
         return false;
 
     const auto &vec = data.channelsData[static_cast<size_t>(channelIndex)];
+
     if (vec.empty())
         return false;
 
-    out.resize(static_cast<int>(vec.size()));
+    // For two-dimensional displacement gesture views such as TTxz,
+    // save the same signal basis that annotation uses:
+    // tangential speed from the selected dimensions.
+    if (isTwoDimensionalDisplacementGestureConfig(cfg)) {
+        const int sr =
+            data.wavSR > 0
+                ? data.wavSR
+                : data.posSR;
 
-    const bool useX = cfg.x;
-    const bool useY = cfg.y;
-    const bool useZ = cfg.z;
+        if (sr <= 0)
+            return false;
+
+        const auto velocity = SignalProcessing::calculateVelocity(vec, sr);
+
+        if (velocity.empty())
+            return false;
+
+        out.resize(static_cast<int>(velocity.size()));
+
+        for (int i = 0; i < out.size(); ++i) {
+            const auto &v = velocity[static_cast<size_t>(i)];
+
+            double sumSq = 0.0;
+
+            if (cfg.x) {
+                const double c = componentFromPosData(v, QLatin1Char('x'));
+                if (std::isfinite(c)) sumSq += c * c;
+            }
+
+            if (cfg.y) {
+                const double c = componentFromPosData(v, QLatin1Char('y'));
+                if (std::isfinite(c)) sumSq += c * c;
+            }
+
+            if (cfg.z) {
+                const double c = componentFromPosData(v, QLatin1Char('z'));
+                if (std::isfinite(c)) sumSq += c * c;
+            }
+
+            out[i] = std::sqrt(sumSq);
+        }
+
+        return true;
+    }
+
+    // behavior for ordinary one-dimensional configs.
+    out.resize(static_cast<int>(vec.size()));
 
     for (int i = 0; i < out.size(); ++i) {
         const auto &s = vec[static_cast<size_t>(i)];
@@ -885,23 +1016,18 @@ static bool extractScalarSeriesForConfig(const spanFile &data,
         double sum   = 0.0;
         int    count = 0;
 
-        // Average over whichever axes are selected for this config.
-        if (useX) { sum += s.x; ++count; }
-        if (useY) { sum += s.y; ++count; }
-        if (useZ) { sum += s.z; ++count; }
+        if (cfg.x) { sum += s.x; ++count; }
+        if (cfg.y) { sum += s.y; ++count; }
+        if (cfg.z) { sum += s.z; ++count; }
 
-        if (count > 0) {
+        if (count > 0)
             out[i] = sum / count;
-        } else {
-            // Fallback – shouldn't happen for valid configs,
-            // but keeps behavior defined if someone creates a 0/0/0 config.
+        else
             out[i] = s.x;
-        }
     }
 
     return true;
 }
-
 
 static inline bool hasInvertPrefix(const QString& s) {
     return s.startsWith('i', Qt::CaseInsensitive);
@@ -1171,7 +1297,27 @@ double mainWindow::getLandmarkYValue(const QString &channelName, double offset) 
             continue;
 
         QString usedAxis;
-        return visualizer->getSignalValueAt(offset, &usedAxis);
+        const double y = visualizer->getSignalValueAt(offset, &usedAxis);
+
+        if (!usedAxis.isEmpty())
+            return y;
+
+        // For two-dimensional displacement views such as TTxz,
+        // Auto tracking has no single visible axis.
+        // Keep regular landmark-table Y as a position value,
+        // anchored to z when possible.
+        const QString dims = axisSuffixFromConfigName(channelName);
+
+        if (dims.size() == 2) {
+            const QChar anchorAxis =
+                dims.contains(QLatin1Char('z'))
+                    ? QLatin1Char('z')
+                    : dims.at(1);
+
+            return getComponentValueAt(channelName, anchorAxis, offset);
+        }
+
+        return y;
     }
 
     return std::numeric_limits<double>::quiet_NaN();
@@ -1662,6 +1808,7 @@ void mainWindow::on_batchApplyTemplateButton_clicked()
 
     int total   = targetFiles.size();
     int success = 0;
+    int tangentialCsvCount = 0;
     QStringList failed;
 
     // -------------------- PROGRESS DIALOG SETUP --------------------
@@ -1766,10 +1913,31 @@ void mainWindow::on_batchApplyTemplateButton_clicked()
                                 + baseName + ".csv";
 
         QString errorMsg;
+
         if (!writeCurrentLandmarksToCsv(csvPath, &errorMsg, /*showSuccessMessage=*/false)) {
             failed << filePath + " (" + errorMsg + ")";
             continue;
         }
+
+        // If this batch annotation created two-dimensional gesture landmarks
+        // such as TTxz / TDxz, also write the companion tangential-values CSV.
+        const QFileInfo csvInfo(csvPath);
+        const QString tangentialCsvPath =
+            QDir(csvInfo.absolutePath()).filePath(
+                csvInfo.completeBaseName() + QStringLiteral("_tangential_values.csv"));
+
+        bool wroteTangentialRows = false;
+
+        if (!writeTangentialGestureValuesCsv(tangentialCsvPath,
+                                             &errorMsg,
+                                             &wroteTangentialRows))
+        {
+            failed << filePath + " (" + errorMsg + ")";
+            continue;
+        }
+
+        if (wroteTangentialRows)
+            ++tangentialCsvCount;
 
         ++success;
 
@@ -1794,13 +1962,15 @@ void mainWindow::on_batchApplyTemplateButton_clicked()
     QString msg = tr("Batch DTW finished.\n\n"
                      "Template: %1\n"
                      "Folder:   %2\n"
-                     "Total files:         %3\n"
-                     "Successfully annotated: %4\n"
-                     "Failed:              %5")
+                     "Total files:              %3\n"
+                     "Successfully annotated:   %4\n"
+                     "Tangential CSVs created:  %5\n"
+                     "Failed:                   %6")
                       .arg(tplId)
                       .arg(templateDir)
                       .arg(total)
                       .arg(success)
+                      .arg(tangentialCsvCount)
                       .arg(failedCount);
 
     if (cancelled) {
@@ -1886,6 +2056,156 @@ bool mainWindow::writeCurrentLandmarksToCsv(const QString &csvFilePath,
     return true;
 }
 
+double mainWindow::getComponentValueAt(const QString &configOrSensorName,
+                                       QChar axis,
+                                       double timeSec) const
+{
+    if (!currentSpan || currentSpan->wavSR <= 0 || !std::isfinite(timeSec))
+        return std::numeric_limits<double>::quiet_NaN();
+
+    const QString baseKey = baseSensorName(configOrSensorName).trimmed();
+
+    int channelIndex = -1;
+
+    for (const auto& s : currentSpan->sensors) {
+        const QString sname = QString::fromStdString(s.second).trimmed();
+
+        if (sname.compare(baseKey, Qt::CaseInsensitive) == 0 ||
+            sname.compare(configOrSensorName.trimmed(), Qt::CaseInsensitive) == 0)
+        {
+            channelIndex = s.first - 1;
+            break;
+        }
+    }
+
+    if (channelIndex < 0 ||
+        channelIndex >= static_cast<int>(currentSpan->channelsData.size()))
+        return std::numeric_limits<double>::quiet_NaN();
+
+    const auto& series = currentSpan->channelsData[static_cast<size_t>(channelIndex)];
+
+    if (series.empty())
+        return std::numeric_limits<double>::quiet_NaN();
+
+    const double sample = timeSec * currentSpan->wavSR;
+
+    if (sample <= 0.0)
+        return componentFromPosData(series.front(), axis);
+
+    const int last = static_cast<int>(series.size()) - 1;
+
+    if (sample >= last)
+        return componentFromPosData(series.back(), axis);
+
+    const int i0 = static_cast<int>(std::floor(sample));
+    const int i1 = std::min(i0 + 1, last);
+    const double frac = sample - i0;
+
+    const double v0 = componentFromPosData(series[static_cast<size_t>(i0)], axis);
+    const double v1 = componentFromPosData(series[static_cast<size_t>(i1)], axis);
+
+    if (!std::isfinite(v0) || !std::isfinite(v1))
+        return std::numeric_limits<double>::quiet_NaN();
+
+    return v0 + (v1 - v0) * frac;
+}
+
+bool mainWindow::writeTangentialGestureValuesCsv(const QString &csvFilePath,
+                                                 QString *errorMessage,
+                                                 bool *wroteRows)
+{
+    if (wroteRows)
+        *wroteRows = false;
+
+    if (!currentSpan)
+        return true;
+
+    QStringList rows;
+
+    for (int row = 0; row < landmarkListModel->rowCount(); ++row) {
+        const QString landmark = landmarkListModel->item(row, 0)->text().trimmed();
+        const QString channel  = landmarkListModel->item(row, 1)->text().trimmed();
+        const QString dims     = axisSuffixFromConfigName(channel);
+
+        // Only export the richer table for exactly two-dimensional gesture views.
+        // Example: TTxz, TDxz, TBxz, TTxy.
+        //
+        // If you added isTwoDimensionalDisplacementGestureConfigName(...),
+        // use that helper instead of only checking dims.size().
+        if (!isTwoDimensionalDisplacementGestureConfigName(channel))
+            continue;
+
+        bool okTime = false;
+        const double timeSec = landmarkListModel->item(row, 2)->text().toDouble(&okTime);
+
+        if (!okTime || !std::isfinite(timeSec))
+            continue;
+
+        const auto basis = getPrecomputedTangentialVelocity(channel);
+
+        if (basis.empty() || currentSpan->wavSR <= 0)
+            continue;
+
+        int idx = static_cast<int>(std::round(timeSec * currentSpan->wavSR));
+        idx = std::max(0, std::min(idx, static_cast<int>(basis.size()) - 1));
+
+        const double basisValue = basis[static_cast<size_t>(idx)];
+
+        const QChar axis1 = dims.at(0);
+        const QChar axis2 = dims.at(1);
+
+        const double value1 = getComponentValueAt(channel, axis1, timeSec);
+        const double value2 = getComponentValueAt(channel, axis2, timeSec);
+
+        if (!std::isfinite(basisValue) ||
+            !std::isfinite(value1) ||
+            !std::isfinite(value2))
+        {
+            continue;
+        }
+
+        rows << QString("%1,%2,%3,%4,%5,%6,%7,%8,%9")
+                    .arg(landmark)
+                    .arg(QString::number(timeSec, 'f', 6))
+                    .arg(channel)
+                    .arg(basisChannelNameForConfig(channel))
+                    .arg(QString::number(basisValue, 'f', 6))
+                    .arg(QString(axis1))
+                    .arg(QString::number(value1, 'f', 6))
+                    .arg(QString(axis2))
+                    .arg(QString::number(value2, 'f', 6));
+    }
+
+    if (rows.isEmpty())
+        return true;
+
+    QFile csvFile(csvFilePath);
+
+    if (!csvFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        if (errorMessage) {
+            *errorMessage =
+                tr("Cannot open tangential gesture values file for writing:\n%1")
+                    .arg(csvFilePath);
+        }
+
+        return false;
+    }
+
+    QTextStream out(&csvFile);
+
+    out << "landmark,time_sec,source_channel,basis_channel,basis_value,"
+        << "dim1_axis,dim1_value,dim2_axis,dim2_value\n";
+
+    for (const QString& row : rows)
+        out << row << "\n";
+
+    csvFile.close();
+
+    if (wroteRows)
+        *wroteRows = true;
+
+    return true;
+}
 
 void mainWindow::getCSVFileButtonClicked()
 {
@@ -1925,14 +2245,38 @@ void mainWindow::getCSVFileButtonClicked()
         return;
 
     QString error;
-    if (!writeCurrentLandmarksToCsv(csvFilePath, &error, true)) {
+
+    if (!writeCurrentLandmarksToCsv(csvFilePath, &error, false)) {
+        QMessageBox::warning(this, tr("CSV Error"), error);
+        return;
+    }
+
+    bool wroteTangentialRows = false;
+
+    const QFileInfo outInfo(csvFilePath);
+    const QString tangentialPath =
+        QDir(outInfo.absolutePath()).filePath(
+            outInfo.completeBaseName() + QStringLiteral("_tangential_values.csv"));
+
+    if (!writeTangentialGestureValuesCsv(tangentialPath,
+                                         &error,
+                                         &wroteTangentialRows))
+    {
         QMessageBox::warning(this, tr("CSV Error"), error);
         return;
     }
 
     lastCsvExportDir = QFileInfo(csvFilePath).absolutePath();
-}
 
+    QString msg = tr("Landmarks have been saved to:\n%1").arg(csvFilePath);
+
+    if (wroteTangentialRows) {
+        msg += tr("\n\nTangential gesture values have also been saved to:\n%1")
+        .arg(tangentialPath);
+    }
+
+    QMessageBox::information(this, tr("CSV Saved"), msg);
+}
 
 void mainWindow::clearAllLandmarks() {
     if (landmarkListModel->rowCount() == 0) {
@@ -2504,14 +2848,38 @@ void mainWindow::visualizeSignal(spanFile &data) {
                 dataToVisualize = SignalProcessing::calculateVelocity(
                     data.channelsData[channelIndex], data.wavSR);
             } else {
-                // tangential speed |v|
-                const auto v = SignalProcessing::calculateVelocity(data.channelsData[channelIndex],
-                                                                   data.wavSR);
+                // Tangential speed using ONLY the selected dimensions.
+                // Example:
+                //   vTTxz -> sqrt(vTTx^2 + vTTz^2)
+                //   vTTxy -> sqrt(vTTx^2 + vTTy^2)
+                const auto v = SignalProcessing::calculateVelocity(
+                    data.channelsData[channelIndex],
+                    data.wavSR
+                    );
+
                 scalarSeries.resize(static_cast<int>(v.size()));
+
                 for (int i = 0; i < scalarSeries.size(); ++i) {
-                    const double vx = v[size_t(i)].x, vy = v[size_t(i)].y, vz = v[size_t(i)].z;
-                    scalarSeries[i] = std::sqrt(vx*vx + vy*vy + vz*vz);
+                    double sumSq = 0.0;
+
+                    if (config.x) {
+                        const double vx = v[size_t(i)].x;
+                        sumSq += vx * vx;
+                    }
+
+                    if (config.y) {
+                        const double vy = v[size_t(i)].y;
+                        sumSq += vy * vy;
+                    }
+
+                    if (config.z) {
+                        const double vz = v[size_t(i)].z;
+                        sumSq += vz * vz;
+                    }
+
+                    scalarSeries[i] = std::sqrt(sumSq);
                 }
+
                 plotScalar = true;
             }
             break;
@@ -2522,19 +2890,49 @@ void mainWindow::visualizeSignal(spanFile &data) {
                     data.channelsData[channelIndex], data.wavSR);
                 dataToVisualize = SignalProcessing::calculateAcceleration(v, data.wavSR);
             } else {
-                // tangential acceleration a_t = (a·v)/|v|
-                const auto v  = SignalProcessing::calculateVelocity(
-                    data.channelsData[channelIndex], data.wavSR);
+                // Tangential acceleration using ONLY the selected dimensions.
+                // a_t = (a_selected · v_selected) / |v_selected|
+                const auto v = SignalProcessing::calculateVelocity(
+                    data.channelsData[channelIndex],
+                    data.wavSR
+                    );
+
                 const auto aa = SignalProcessing::calculateAcceleration(v, data.wavSR);
+
                 const double eps = 1e-12;
                 const int N = static_cast<int>(std::min(v.size(), aa.size()));
+
                 scalarSeries.resize(N);
+
                 for (int i = 0; i < N; ++i) {
-                    const double vx = v[size_t(i)].x,  vy = v[size_t(i)].y,  vz = v[size_t(i)].z;
-                    const double ax = aa[size_t(i)].x, ay = aa[size_t(i)].y, az = aa[size_t(i)].z;
-                    const double speed = std::sqrt(vx*vx + vy*vy + vz*vz);
-                    scalarSeries[i] = (vx*ax + vy*ay + vz*az) / std::max(speed, eps);
+                    double dot = 0.0;
+                    double speedSq = 0.0;
+
+                    if (config.x) {
+                        const double vx = v[size_t(i)].x;
+                        const double ax = aa[size_t(i)].x;
+                        dot += vx * ax;
+                        speedSq += vx * vx;
+                    }
+
+                    if (config.y) {
+                        const double vy = v[size_t(i)].y;
+                        const double ay = aa[size_t(i)].y;
+                        dot += vy * ay;
+                        speedSq += vy * vy;
+                    }
+
+                    if (config.z) {
+                        const double vz = v[size_t(i)].z;
+                        const double az = aa[size_t(i)].z;
+                        dot += vz * az;
+                        speedSq += vz * vz;
+                    }
+
+                    const double speed = std::sqrt(speedSq);
+                    scalarSeries[i] = dot / std::max(speed, eps);
                 }
+
                 plotScalar = true;
             }
             break;
@@ -2558,22 +2956,50 @@ void mainWindow::visualizeSignal(spanFile &data) {
                 }
             }
 
-            // precompute non-directional |v_xy| for this base sensor/config
-            {
+            // Precompute 2D tangential speed for exactly two selected displacement
+            // dimensions. Example: TTxz -> sqrt(vTTx^2 + vTTz^2).
+            if (dimCount == 2) {
                 const auto v = SignalProcessing::calculateVelocity(
                     data.channelsData[channelIndex], data.wavSR);
-                std::vector<double> speedXY;
-                speedXY.reserve(v.size());
-                for (const auto& vi : v) {
-                    speedXY.push_back(std::sqrt(vi.x * vi.x + vi.y * vi.y));
-                }
-                // Key by the exact config name so Label can ask with whatever it knows;
-                // also store by base sensor name to make lookup flexible.
-                precomputedSpeedXY[config.name] = speedXY;
-                const QString baseKey = baseConfigName.trimmed();
-                if (!baseKey.isEmpty()) precomputedSpeedXY[baseKey] = speedXY;
-            }
 
+                QString dims;
+                if (config.x) dims += QLatin1Char('x');
+                if (config.y) dims += QLatin1Char('y');
+                if (config.z) dims += QLatin1Char('z');
+
+                std::vector<double> speed;
+                speed.reserve(v.size());
+
+                for (const auto& vi : v) {
+                    double sumSq = 0.0;
+
+                    if (config.x)
+                        sumSq += static_cast<double>(vi.x) * static_cast<double>(vi.x);
+
+                    if (config.y)
+                        sumSq += static_cast<double>(vi.y) * static_cast<double>(vi.y);
+
+                    if (config.z)
+                        sumSq += static_cast<double>(vi.z) * static_cast<double>(vi.z);
+
+                    speed.push_back(std::sqrt(sumSq));
+                }
+
+                precomputedTangentialVelocity[config.name] = speed;
+
+                const QString baseKey = baseConfigName.trimmed();
+
+                if (!baseKey.isEmpty())
+                    precomputedTangentialVelocity[baseKey + dims] = speed;
+
+                // Compatibility cache for the old xy-only helper.
+                if (dims == QLatin1String("xy")) {
+                    precomputedSpeedXY[config.name] = speed;
+
+                    if (!baseKey.isEmpty())
+                        precomputedSpeedXY[baseKey] = speed;
+                }
+            }
             break;
         }
         }
@@ -3123,6 +3549,7 @@ void mainWindow::clearAllPlots()
     m_allLabels.clear();
 
     precomputedVelocity.clear();
+    precomputedTangentialVelocity.clear();
     precomputedSpeedXY.clear();
 
     QLayoutItem* child = nullptr;
@@ -4089,43 +4516,86 @@ std::vector<double> mainWindow::getPrecomputedVelocity(const QString &legendName
 
 // New: return |v_xy| series for the given config/sensor name.
 // If not cached yet, compute-once and cache under both the exact key and its base sensor key.
-std::vector<double> mainWindow::getPrecomputedSpeedXY(const QString& configOrSensorName)
+std::vector<double> mainWindow::getPrecomputedTangentialVelocity(
+    const QString& configOrSensorName)
 {
-    if (configOrSensorName.isEmpty() || !currentSpan) return {};
+    if (configOrSensorName.isEmpty() || !currentSpan)
+        return {};
 
-    // Fast path: exact cache hit
-    if (precomputedSpeedXY.contains(configOrSensorName))
-        return precomputedSpeedXY[configOrSensorName];
+    if (precomputedTangentialVelocity.contains(configOrSensorName))
+        return precomputedTangentialVelocity[configOrSensorName];
 
-    // Build a flexible base key (strip i/v/a/x/y/z)
-    QString baseKey = baseSensorName(configOrSensorName);
-    if (precomputedSpeedXY.contains(baseKey))
-        return precomputedSpeedXY[baseKey];
+    const QString dims = axisSuffixFromConfigName(configOrSensorName);
 
-    // Resolve the sensor/channel index
+    if (dims.size() != 2)
+        return {};
+
+    const QString baseKey = baseSensorName(configOrSensorName).trimmed();
+    const QString flexibleKey = baseKey + dims;
+
+    if (precomputedTangentialVelocity.contains(flexibleKey))
+        return precomputedTangentialVelocity[flexibleKey];
+
     int channelIndex = -1;
+
     for (const auto& s : currentSpan->sensors) {
         const QString sname = QString::fromStdString(s.second).trimmed();
-        if (sname == baseKey.trimmed() || sname == configOrSensorName.trimmed()) {
+
+        if (sname.compare(baseKey, Qt::CaseInsensitive) == 0 ||
+            sname.compare(configOrSensorName.trimmed(), Qt::CaseInsensitive) == 0)
+        {
             channelIndex = s.first - 1;
             break;
         }
     }
-    if (channelIndex < 0
-        || channelIndex >= static_cast<int>(currentSpan->channelsData.size()))
+
+    if (channelIndex < 0 ||
+        channelIndex >= static_cast<int>(currentSpan->channelsData.size()))
         return {};
 
-    // Compute |v_xy|
     const auto v = SignalProcessing::calculateVelocity(
         currentSpan->channelsData[channelIndex], currentSpan->wavSR);
-    std::vector<double> speedXY; speedXY.reserve(v.size());
-    for (const auto& vi : v) speedXY.push_back(std::sqrt(vi.x * vi.x + vi.y * vi.y));
 
-    // Cache under both keys
-    precomputedSpeedXY[configOrSensorName] = speedXY;
-    if (!baseKey.isEmpty()) precomputedSpeedXY[baseKey] = speedXY;
+    std::vector<double> speed;
+    speed.reserve(v.size());
 
-    return speedXY;
+    for (const auto& vi : v) {
+        double sumSq = 0.0;
+
+        for (int i = 0; i < dims.size(); ++i) {
+            const QChar axis = dims.at(i);
+            const double c = componentFromPosData(vi, axis);
+
+            if (std::isfinite(c))
+                sumSq += c * c;
+        }
+
+        speed.push_back(std::sqrt(sumSq));
+    }
+
+    precomputedTangentialVelocity[configOrSensorName] = speed;
+
+    if (!flexibleKey.isEmpty())
+        precomputedTangentialVelocity[flexibleKey] = speed;
+
+    return speed;
+}
+
+
+std::vector<double> mainWindow::getPrecomputedSpeedXY(
+    const QString& configOrSensorName)
+{
+    QString key = configOrSensorName;
+    const QString dims = axisSuffixFromConfigName(key);
+
+    if (dims.size() != 2) {
+        const QString base = baseSensorName(key);
+
+        if (!base.isEmpty())
+            key = base + QStringLiteral("xy");
+    }
+
+    return getPrecomputedTangentialVelocity(key);
 }
 
 void mainWindow::onLandmarkAddedFromLabel(const QString &channel,
@@ -4436,6 +4906,27 @@ QString mainWindow::buildHelpHtml() const
         Reordering traces can make complex multi-channel analyses easier to interpret.
         </p>
 
+        <h4>Two-dimensional gesture views</h4>
+        <p>
+        If exactly two displacement dimensions are selected from the same sensor, SPAN displays
+        both positional traces together and can use them as a two-dimensional gesture view.
+        For example, <code>TTxz</code> displays tongue-tip X and Z displacement together.
+        </p>
+
+        <p>
+        In this mode, the visible traces remain positional traces, but assisted gesture
+        landmarking uses a hidden tangential velocity basis. For example:
+        </p>
+
+        <pre>vTTtan = sqrt(vTTx^2 + vTTz^2)</pre>
+
+        <p>
+        This is useful when a gesture involves movement in more than one spatial dimension.
+        For <code>TTxz</code>, the regular landmark-table <code>Y</code> value remains a
+        positional value, anchored to <code>TTz</code> when possible. Tangential velocity
+        values are exported separately in the companion tangential-values CSV.
+        </p>
+
         <h3>4. Derived channels</h3>
         <ul>
           <li>Choose two input channels to combine.</li>
@@ -4478,7 +4969,8 @@ QString mainWindow::buildHelpHtml() const
         <h3>6. Landmark annotation</h3>
         <ul>
           <li><b>Right-click</b> on a trace to place a plain landmark label.</li>
-          <li><b>Shift + right-click</b> on a single-channel trace to snap to the nearest extremum and place <code>MaxC</code>.</li>
+          <li><b>Shift + right-click</b> on a one-dimensional displacement trace, such as <code>TTz</code>, to snap to the nearest positional extremum and place <code>MaxC</code>.</li>
+          <li><b>Shift + right-click</b> on a two-dimensional displacement gesture view, such as <code>TTxz</code> or <code>TDxz</code>, to use tangential-velocity-assisted gesture landmarking.</li>
           <li>Drag a landmark handle to adjust its timing directly in the plot.</li>
           <li>Landmarks appear in the landmark table and can also be reviewed or edited there.</li>
           <li>Use <b>Place Labels</b> to place selected landmark labels through the UI controls.</li>
@@ -4488,30 +4980,78 @@ QString mainWindow::buildHelpHtml() const
         <p>
         Landmark placement is one of the central functions of SPAN.
         Depending on the current signal and available motion information,
-        landmarks can be placed manually or with assisted placement based on local extrema.
-        The landmark table is intended to give a compact summary of the annotations currently present in the file.
+        landmarks can be placed manually or with assisted placement based on local displacement extrema
+        or velocity structure.
         </p>
 
         <p>
-        When appropriate velocity information is available, SPAN can derive additional
-        gesture-related landmarks from a <code>MaxC</code> anchor, including
-        <code>GONS</code>, <code>NONS</code>, <code>PVEL1</code>,
-        <code>PVEL2</code>, <code>NOFFS</code>, and <code>GOFFS</code>.
-        These labels are intended for analyses of gestural timing, movement coordination,
-        and the internal temporal structure of articulatory events.
+        For one-dimensional displacement traces, assisted placement uses the corresponding
+        single-axis velocity trace. For example, <code>TTz</code> uses <code>vTTz</code>.
+        </p>
+
+        <p>
+        For two-dimensional displacement gesture views, assisted placement uses tangential velocity.
+        For example, <code>TTxz</code> uses:
+        </p>
+
+        <pre>vTTtan = sqrt(vTTx^2 + vTTz^2)</pre>
+
+        <p>
+        In this mode, SPAN identifies the low-speed target region near the click and derives
+        gesture landmarks from the surrounding tangential-velocity structure. These may include
+        <code>GONS</code>, <code>PVEL1</code>, <code>NONS</code>,
+        <code>MaxC</code>, <code>NOFFS</code>, <code>PVEL2</code>, and
+        <code>GOFFS</code>.
+        </p>
+
+        <p>
+        The landmark table remains compact and continues to show:
+        <code>Name</code>, <code>Channel</code>, <code>Offset</code>, and <code>Y</code>.
+        For two-dimensional gesture views, <code>Y</code> is a positional display value,
+        not the tangential velocity value.
         </p>
 
         <h3>7. Landmark export</h3>
         <ul>
           <li>Use <b>Export CSV</b> to save landmark information from the current file.</li>
-          <li>The export includes the landmark label, associated channel, time offset, and Y value.</li>
-          <li>The exported table can be used for downstream statistical analysis, quality control, or batch summaries.</li>
+          <li>The regular export includes the landmark label, associated channel, time offset, and Y value.</li>
+          <li>The regular landmark CSV keeps the same compact format: <code>Name,Channel,Offset,Y</code>.</li>
+          <li>If two-dimensional displacement gesture landmarks are present, SPAN also writes a companion tangential-values CSV.</li>
         </ul>
 
         <p>
         Exported landmark files are intended to bridge the interactive annotation stage and
         later quantitative analysis. In practice, this makes it easier to annotate in SPAN
         while analyzing results later in R, Python, Excel, or other statistical tools.
+        </p>
+
+        <p>
+        For ordinary one-dimensional traces, the regular <code>Y</code> value is the plotted value
+        at the landmark time.
+        </p>
+
+        <p>
+        For two-dimensional displacement gesture views such as <code>TTxz</code>, the regular
+        <code>Y</code> value remains a positional display value. Tangential velocity values are
+        not stored in <code>Y</code>. Instead, they are written to the companion file:
+        </p>
+
+        <pre>*_tangential_values.csv</pre>
+
+        <p>
+        The companion file contains the values needed for downstream movement-amplitude or
+        stiffness calculations, such as:
+        </p>
+
+        <pre>landmark,time_sec,source_channel,basis_channel,basis_value,dim1_axis,dim1_value,dim2_axis,dim2_value</pre>
+
+        <p>
+        For example, for <code>TTxz</code>, <code>source_channel</code> is
+        <code>TTxz</code>, <code>basis_value</code> is the value of
+        <code>vTTtan</code> at the landmark time, and the dimension columns store
+        the selected component positions, such as X and Z. This generic format also
+        supports multiple two-dimensional gesture channels in the same file, such as
+        <code>TTxz</code>, <code>TDxz</code>, or <code>TBxz</code>.
         </p>
 
         <h3>8. Templates and DTW-based annotation transfer</h3>
