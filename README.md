@@ -219,12 +219,26 @@ SPAN generates:
 
 - `.span` files
 - landmark `.csv` files
+- companion `*_tangential_values.csv` files when two-dimensional displacement gesture landmarks are present
 
 ---
 
-## Third-party code
+## Third-party software
 
-SPAN includes third-party code from **QCustomPlot**, which is used for 2D plotting and interactive visualization.
+SPAN uses the following third-party software:
+
+### Qt
+
+Qt provides the cross-platform application framework and user-interface components used by SPAN.
+
+- **Framework:** Qt 6
+- **Copyright:** The Qt Company Ltd. and other contributors
+- **Website:** https://www.qt.io/
+- **License:** Open-source Qt components are available under applicable GNU LGPL and/or GPL licenses
+
+### QCustomPlot
+
+QCustomPlot is used for 2D plotting and interactive signal visualization.
 
 - **Component:** QCustomPlot
 - **Author:** Emanuel Eichhammer
@@ -232,7 +246,21 @@ SPAN includes third-party code from **QCustomPlot**, which is used for 2D plotti
 - **Version:** 2.1.1
 - **License:** GNU General Public License v3 or later
 
-The original copyright and license notice are preserved in the bundled source files.
+### FFTW
+
+FFTW is used for frequency-domain signal processing.
+
+- **Website:** https://www.fftw.org/
+- **License:** GNU General Public License v2 or later
+
+### PortAudio
+
+PortAudio is used for audio playback.
+
+- **Website:** https://www.portaudio.com/
+- **License:** PortAudio open-source license
+
+Applicable copyright and license notices for third-party components are preserved with the distributed software and source code.
 
 ---
 
@@ -240,7 +268,13 @@ The original copyright and license notice are preserved in the bundled source fi
 
 SPAN is distributed under the **GNU General Public License v3.0 or later**.
 
-This repository also includes bundled third-party code from QCustomPlot. Please preserve the original license headers in the bundled source files.
+SPAN also uses third-party software components distributed under their respective licenses. Please preserve all applicable copyright, attribution, and license notices.
+
+---
+
+## Source code
+
+The source code for SPAN is available from the SPAN GitHub repository.
 
 ---
 
