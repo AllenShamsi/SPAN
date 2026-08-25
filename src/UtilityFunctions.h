@@ -8,7 +8,7 @@
 
 struct OcclusalCorrectionModel
 {
-    Eigen::Vector3d origin;                 // Centroid of BP-L / BP-F / BP-R
+    Eigen::Vector3d origin; // Selected coordinate origin in bite-plane space
     Eigen::Matrix3d axes;                   // Columns = canonical x, y, z axes
     Eigen::MatrixXd canonicalReferencePts;  // [nRef x 3]
 };
@@ -24,9 +24,11 @@ Eigen::MatrixXd transformPointsToCanonicalFrame(const Eigen::MatrixXd& pts,
 Eigen::Matrix4d estimateRigidTransform(const Eigen::MatrixXd& sourcePts,
                                        const Eigen::MatrixXd& targetPts);
 
-OcclusalCorrectionModel buildOcclusalCorrectionModel(const std::vector<channel>& bitePlaneData,
-                                                     const std::vector<int>& refIdx,
-                                                     const std::vector<int>& bpIdx);
+OcclusalCorrectionModel buildOcclusalCorrectionModel(
+    const std::vector<channel>& bitePlaneData,
+    const std::vector<int>& refIdx,
+    const std::vector<int>& bpIdx,
+    int originIdx = -1);
 
 std::vector<channel> applyOcclusalCorrection(const OcclusalCorrectionModel& model,
                                              const std::vector<channel>& rawData,
