@@ -54,7 +54,11 @@ public:
     // Exposed for Label helpers (legacy 1D per-axis velocity)
     std::vector<double> getPrecomputedVelocity(const QString &legendName);
 
-    // 2D non-directional speed cache helper (|v_xy| = sqrt(vx^2 + vy^2))
+    // 2D tangential speed for configured two-axis displacement views.
+    // Example: TTxz -> sqrt(vTTx^2 + vTTz^2)
+    std::vector<double> getPrecomputedTangentialVelocity(const QString& configOrSensorName);
+
+    // Legacy xy helper kept for compatibility.
     std::vector<double> getPrecomputedSpeedXY(const QString& configOrSensorName);
 
 private slots:
@@ -233,6 +237,14 @@ private:
                                     QString *errorMessage,
                                     bool showSuccessMessage);
 
+    bool writeTangentialGestureValuesCsv(const QString &csvFilePath,
+                                         QString *errorMessage,
+                                         bool *wroteRows = nullptr);
+
+    double getComponentValueAt(const QString &configOrSensorName,
+                               QChar axis,
+                               double timeSec) const;
+
     bool loadSpanIntoUi(const QString &filePath);
 
     // Help
@@ -261,9 +273,13 @@ private:
     QVector<Label*>               m_allLabels;
 
     // Derived caches for label/peak workflows
-    // 1) Legacy per-axis velocity (keyed by config legend, e.g., "vx")
+    // 1) Legacy per-axis velocity, keyed by config legend, e.g., TTz
     QMap<QString, std::vector<double>> precomputedVelocity;
-    // 2) New non-directional |v_xy| speed (keyed by config/sensor name)
+
+    // 2) 2D tangential velocity, keyed by config legend, e.g., TTxz
+    QMap<QString, std::vector<double>> precomputedTangentialVelocity;
+
+    // Legacy |v_xy| cache kept for compatibility with older code paths
     QMap<QString, std::vector<double>> precomputedSpeedXY;
 
     spanFile *currentSpan{nullptr};
