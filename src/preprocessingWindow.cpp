@@ -1,4 +1,5 @@
 #include "preprocessingWindow.h"
+#include "UiAppearance.h"
 #include "ui_preprocessingwindow.h"
 #include "OptionManager.h"
 
@@ -41,6 +42,8 @@ preprocessingWindow::preprocessingWindow(QWidget *parent)
     , proceedPressedFirstTime(false)
 {
     ui->setupUi(this);
+    ui->BPFileSelectListView->setFixedHeight(ui->BPFileSelectListView->fontMetrics().height() + 10);
+    UiAppearance::fitToScreen(*this);
 
     // Put central widget into a scroll area (for small screens)
     auto *scrollArea = new QScrollArea(this);
@@ -113,7 +116,7 @@ preprocessingWindow::preprocessingWindow(QWidget *parent)
 
     Q_ASSERT(checkBoxes.size() == comboBoxes.size());
 
-    // ---- Dedicated BP-L/BP-F/BP-R combos (add these widgets in Designer) ----
+    // ---- Dedicated bite-plane role selectors ----
     bpLeftCombo  = ui->bpLeftCombo;   // BP-L
     bpFrontCombo = ui->bpFrontCombo;  // BP-F
     bpRightCombo = ui->bpRightCombo;  // BP-R
@@ -185,7 +188,7 @@ preprocessingWindow::preprocessingWindow(QWidget *parent)
         previousSelections[i] = "Select";
     }
 
-    // Keep options mutually exclusive (if OptionManager is used that way)
+    // Keep built-in channel names mutually exclusive.
     connect(optionManager.get(), &OptionManager::optionAvailabilityChanged,
             this, [this](const QString &option, bool available) {
                 for (auto *combo : comboBoxes) {
@@ -390,7 +393,7 @@ void preprocessingWindow::refreshBpCombos()
         originCombo->blockSignals(true);
         originCombo->clear();
 
-        // -1 preserves the original SPAN behavior.
+        // -1 selects the bite-plane centroid.
         originCombo->addItem("BP centroid", -1);
 
         for (int i = 0; i < static_cast<int>(bpSensorData.size()); ++i) {
@@ -1672,6 +1675,7 @@ void preprocessingWindow::showHelpDialog()
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     layout->addWidget(buttons);
 
+    UiAppearance::fitToScreen(dialog);
     dialog.exec();
 }
 

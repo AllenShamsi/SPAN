@@ -16,93 +16,15 @@ Label::Label(QCustomPlot *plot)
         if (event->button() != Qt::RightButton)
             return;
 
-        double clickedX;
-
-        // If mainWindow set autoAnnotateX, use that directly.
-        QVariant autoVar = m_plot->property("autoAnnotateX");
-        if (autoVar.isValid()) {
-            clickedX = autoVar.toDouble();
-            m_plot->setProperty("autoAnnotateX", QVariant());
-        } else {
-            clickedX = m_plot->xAxis->pixelToCoord(event->pos().x());
-        }
+        const double clickedX = m_plot->xAxis->pixelToCoord(event->pos().x());
 
         if (event->modifiers() & Qt::ShiftModifier)
         {
-            QString legendName;
-            if (m_plot->graphCount() > 0 && !m_plot->graph(0)->name().isEmpty())
-                legendName = m_plot->graph(0)->name();
-            else {
-                legendName = "Spectrogram";
-                return;
-            }
-
-            const int dimCount = countTrailingLowerCase(legendName);
-            const bool isSingleChannel = (dimCount == 1);
-
-            const bool startsWithDerivedParameter =
-                legendName.startsWith(QLatin1Char('v')) ||
-                legendName.startsWith(QLatin1Char('a')) ||
-                legendName.startsWith(QLatin1Char('i'));
-
-            const bool isTwoDimensionalGesture =
-                (dimCount == 2 && !startsWithDerivedParameter);
-
-            // One dimension: old behavior.
-            // Two dimensions: new tangential gesture behavior.
-            // Three dimensions or anything else: manual label only for now.
-            if (!isSingleChannel && !isTwoDimensionalGesture) {
-                placeLabelAt(clickedX, QString());
-                return;
-            }
-
-            if (auto *mw = qobject_cast<mainWindow*>(m_plot->window())) {
-                const double sr = mw->getCurrentSpanWavSR();
-
-                std::vector<double> velocityData;
-                double centerX = clickedX;
-
-                if (isSingleChannel) {
-                    // Existing behavior:
-                    // snap MaxC to the nearest visible displacement extremum,
-                    // then use the matching signed single-axis velocity.
-                    centerX = findNearestPeak(clickedX, legendName);
-                    velocityData = mw->getPrecomputedVelocity(legendName);
-                } else {
-                    // New behavior for TTxz / TTxy / TTyz:
-                    // keep the visible position traces, but use hidden tangential speed
-                    // as the gesture-finding basis.
-                    velocityData = mw->getPrecomputedTangentialVelocity(legendName);
-
-                    if (!velocityData.empty())
-                        centerX = findNearestVelocityMinimum(clickedX, velocityData, sr);
-                }
-
-                placeLabelAt(centerX, QStringLiteral("MaxC"));
-
-                if (!velocityData.empty()) {
-                    landmarks lm;
-
-                    if (isTwoDimensionalGesture) {
-                        findTangentialGestureLandmarksFromSpeed(lm, centerX, velocityData, sr);
-                    } else {
-                        findPrecedingVelocityExtremumFromVector(lm, centerX, velocityData, sr);
-                        findFollowingVelocityExtremumFromVector (lm, centerX, velocityData, sr);
-                    }
-
-                    if (std::isfinite(lm.GONS))  placeLabelAt(lm.GONS,  QStringLiteral("GONS"));
-                    if (std::isfinite(lm.NONS))  placeLabelAt(lm.NONS,  QStringLiteral("NONS"));
-                    if (std::isfinite(lm.PVEL1)) emit landmarkAdded(legendName, lm.PVEL1, QStringLiteral("PVEL1"));
-                    if (std::isfinite(lm.PVEL2)) emit landmarkAdded(legendName, lm.PVEL2, QStringLiteral("PVEL2"));
-                    if (std::isfinite(lm.NOFFS)) placeLabelAt(lm.NOFFS, QStringLiteral("NOFFS"));
-                    if (std::isfinite(lm.GOFFS)) placeLabelAt(lm.GOFFS, QStringLiteral("GOFFS"));
-                }
-            }
-
+            annotateGestureAtTime(clickedX, AnchorMode::SnapNearInput);
             return;
         }
 
-        // No Shift: just place a plain label at the clicked position
+        // Without Shift, place a plain label at the clicked position.
         placeLabelAt(clickedX, QString());
     });
 
@@ -118,6 +40,97 @@ Label::Label(QCustomPlot *plot)
     m_plot->show();
     m_plot->setInteraction(QCP::iRangeDrag, false);
     m_plot->setInteraction(QCP::iRangeZoom, false);
+}
+
+void Label::annotateGestureAtTime(double clickedX, AnchorMode mode)
+{
+    if (!m_plot || (mode == AnchorMode::PreserveRefinedAnchor && !std::isfinite(clickedX)))
+        return;
+    QString legendName;
+    if (m_plot->graphCount() > 0 && !m_plot->graph(0)->name().isEmpty())
+        legendName = m_plot->graph(0)->name();
+    else {
+        legendName = "Spectrogram";
+        return;
+    }
+
+    const int dimCount = countTrailingLowerCase(legendName);
+    const bool isSingleChannel = (dimCount == 1);
+
+    const bool startsWithDerivedParameter =
+        legendName.startsWith(QLatin1Char('v')) ||
+        legendName.startsWith(QLatin1Char('a')) ||
+        legendName.startsWith(QLatin1Char('i'));
+
+    const bool isTwoDimensionalGesture =
+        (dimCount == 2 && !startsWithDerivedParameter);
+
+    // One-dimensional gestures use signed component velocity.
+    // Two-dimensional gestures use tangential speed.
+    // Other dimensionalities support plain manual labels only.
+    if (!isSingleChannel && !isTwoDimensionalGesture) {
+        placeLabelAt(clickedX, QString());
+        return;
+    }
+
+    if (auto *mw = qobject_cast<mainWindow*>(m_plot->window())) {
+        const double sr = mw->getCurrentSpanWavSR();
+
+        std::vector<double> velocityData;
+        double centerX = clickedX;
+
+        if (isSingleChannel) {
+            // Use signed component velocity for one-dimensional gestures.
+            // Manual annotation first snaps to a visible displacement extremum.
+            if (mode == AnchorMode::SnapNearInput)
+                centerX = findNearestPeak(clickedX, legendName);
+            velocityData = mw->getPrecomputedVelocity(legendName);
+        } else {
+            // For TTxz / TTxy / TTyz gestures,
+            // keep the visible position traces, but use hidden tangential speed
+            // as the gesture-finding basis.
+            velocityData = mw->getPrecomputedTangentialVelocity(legendName);
+
+            if (mode == AnchorMode::SnapNearInput && !velocityData.empty())
+                centerX = findNearestVelocityMinimum(clickedX, velocityData, sr);
+        }
+
+        if (mode == AnchorMode::PreserveRefinedAnchor) {
+            // Bound against full-resolution data, never the display graph or viewport.
+            if (!std::isfinite(clickedX) || sr <= 0.0 || velocityData.empty())
+                return;
+            centerX = std::clamp(clickedX, 0.0, (velocityData.size() - 1) / sr);
+        }
+
+        placeLabelAt(centerX, QStringLiteral("MaxC"));
+
+        if (!velocityData.empty()) {
+            landmarks lm;
+
+            if (isTwoDimensionalGesture) {
+                // Preserve the legacy interactive window only for manual annotation.
+                double searchRadiusSec = kDtwTangentialSearchRadiusSec;
+                if (mode == AnchorMode::SnapNearInput && m_plot->xAxis) {
+                    const double visibleRange = m_plot->xAxis->range().size();
+                    if (visibleRange > 0.0)
+                        searchRadiusSec = std::max(0.12, std::min(0.25 * visibleRange, 0.30));
+                }
+                findTangentialGestureLandmarksFromSpeed(lm, centerX, velocityData, sr,
+                                                       searchRadiusSec);
+            } else {
+                findPrecedingVelocityExtremumFromVector(lm, centerX, velocityData, sr);
+                findFollowingVelocityExtremumFromVector (lm, centerX, velocityData, sr);
+            }
+
+            if (std::isfinite(lm.GONS))  placeLabelAt(lm.GONS,  QStringLiteral("GONS"));
+            if (std::isfinite(lm.NONS))  placeLabelAt(lm.NONS,  QStringLiteral("NONS"));
+            if (std::isfinite(lm.PVEL1)) emit landmarkAdded(legendName, lm.PVEL1, QStringLiteral("PVEL1"), QUuid::createUuid());
+            if (std::isfinite(lm.PVEL2)) emit landmarkAdded(legendName, lm.PVEL2, QStringLiteral("PVEL2"), QUuid::createUuid());
+            if (std::isfinite(lm.NOFFS)) placeLabelAt(lm.NOFFS, QStringLiteral("NOFFS"));
+            if (std::isfinite(lm.GOFFS)) placeLabelAt(lm.GOFFS, QStringLiteral("GOFFS"));
+        }
+    }
+
 }
 
 namespace {
@@ -164,10 +177,17 @@ inline void safeRemove(QCustomPlot* plot, QCPAbstractItem* it) {
 }
 } // namespace
 
-void Label::setVelocityThresholdFraction(double value)
+void Label::setVelocityThresholdFractions(double gons, double nons, double noffs, double goffs)
 {
-    if (std::isfinite(value) && value > 0.0 && value < 1.0)
-        m_velocityThresholdFraction = value;
+    auto valid = [](double value) {
+        return std::isfinite(value) && value > 0.0 && value < 1.0;
+    };
+    if (valid(gons) && valid(nons) && valid(noffs) && valid(goffs)) {
+        m_gonsThresholdFraction = gons;
+        m_nonsThresholdFraction = nons;
+        m_noffsThresholdFraction = noffs;
+        m_goffsThresholdFraction = goffs;
+    }
 }
 
 void Label::setReopeningDeadbandFraction(double value)
@@ -314,7 +334,7 @@ double Label::findNearestPeak(double xClicked, const QString &labelName)
     auto itBegin = data->constBegin();
     auto itEnd   = data->constEnd();
 
-    // --- 2. Decide what kind of extremum we "prefer" near xClicked ---
+    // --- 2. Determine the preferred extremum polarity near xClicked ---
 
     enum class PeakType { Any, Max, Min };
     PeakType desired = PeakType::Any;
@@ -433,7 +453,7 @@ double Label::findNearestPeak(double xClicked, const QString &labelName)
             return bestMinX;
     }
 
-    // Fallback: original behavior – nearest extremum of either type
+    // Fallback: select the nearest extremum of either type.
     return bestAnyX;
 }
 
@@ -485,7 +505,7 @@ void Label::findPrecedingVelocityExtremumFromVector(Label::landmarks &lm,
     if (maxAbsPast <= 0.0)
         return;
 
-    // Same idea as PVEL2: ignore tiny wiggles near zero.
+    // Ignore near-zero fluctuations, as in the PVEL2 search.
     const double deadband = m_reopeningDeadbandFraction * maxAbsPast;
 
     // 3) Scan backward from MaxC.
@@ -573,9 +593,10 @@ void Label::findPrecedingVelocityExtremumFromVector(Label::landmarks &lm,
     };
 
     const double peakMag = sign * y_PVEL1;  // positive
-    const double threshold = m_velocityThresholdFraction * peakMag;
+    const double gonsThreshold = m_gonsThresholdFraction * peakMag;
+    const double nonsThreshold = m_nonsThresholdFraction * peakMag;
 
-    // 5) GONS: first time before PVEL1 where velocity crosses threshold upward.
+    // 5) GONS: first time before PVEL1 where velocity crosses gonsThreshold upward.
     double gons = std::numeric_limits<double>::quiet_NaN();
 
     for (int i = pvelIndex; i >= searchStart + 1; --i) {
@@ -585,19 +606,19 @@ void Label::findPrecedingVelocityExtremumFromVector(Label::landmarks &lm,
         if (!std::isfinite(prevNorm) || !std::isfinite(currNorm))
             continue;
 
-        if (crossesUpInclusive(prevNorm, currNorm, threshold)) {
+        if (crossesUpInclusive(prevNorm, currNorm, gonsThreshold)) {
             gons = interpolateThresholdCrossing(i - 1, i,
                                                 prevNorm, currNorm,
-                                                threshold, sr);
+                                                gonsThreshold, sr);
             break;
         }
     }
 
-    // Fallback: if PVEL1 exists but no clean threshold crossing was found,
+    // Fallback: if PVEL1 exists but no clean gonsThreshold crossing was found,
     // still place GONS at the left edge of the local pre-MaxC search window.
     lm.GONS = std::isfinite(gons) ? gons : (searchStart / sr);
 
-    // 6) NONS: first time after PVEL1 where velocity crosses threshold downward.
+    // 6) NONS: first time after PVEL1 where velocity crosses nonsThreshold downward.
     double nons = std::numeric_limits<double>::quiet_NaN();
 
     for (int i = pvelIndex; i < nearestIndex; ++i) {
@@ -607,10 +628,10 @@ void Label::findPrecedingVelocityExtremumFromVector(Label::landmarks &lm,
         if (!std::isfinite(currNorm) || !std::isfinite(nextNorm))
             continue;
 
-        if (crossesDownInclusive(currNorm, nextNorm, threshold)) {
+        if (crossesDownInclusive(currNorm, nextNorm, nonsThreshold)) {
             nons = interpolateThresholdCrossing(i, i + 1,
                                                 currNorm, nextNorm,
-                                                threshold, sr);
+                                                nonsThreshold, sr);
             break;
         }
     }
@@ -666,7 +687,7 @@ void Label::findFollowingVelocityExtremumFromVector(Label::landmarks &lm,
                       : ExtremumType::LocalMaximum;
     }
 
-    // 3) Find the main reopening peak (PVEL2), not just the first tiny extremum.
+    // 3) Find the dominant reopening peak (PVEL2) within its excursion.
     //    Strategy:
     //    - estimate a small deadband around zero from the future opening-side signal
     //    - wait until velocity clearly leaves that deadband in the reopening direction
@@ -684,7 +705,7 @@ void Label::findFollowingVelocityExtremumFromVector(Label::landmarks &lm,
     if (maxAbsFuture <= 0.0)
         return;
 
-    // Deadband to ignore tiny post-MaxC wiggles near zero.
+    // Deadband for near-zero post-MaxC fluctuations.
     // 5% is the default.
     const double deadband = m_reopeningDeadbandFraction * maxAbsFuture;
 
@@ -754,17 +775,18 @@ void Label::findFollowingVelocityExtremumFromVector(Label::landmarks &lm,
     lm.PVEL2 = pvelIndex / sr;
 
     // 4) Sign-normalized velocity: "away from target" is always positive.
-    //    Threshold is 20% of |PVEL2|.
+    //    Each boundary defaults to 20% of |PVEL2|.
     double sign = (y_PVEL2 >= 0.0 ? 1.0 : -1.0);
     auto vNorm = [&](int idx) -> double {
         return sign * velocityData[idx];
     };
     double peakMag  = sign * y_PVEL2;   // > 0
-    double threshold = m_velocityThresholdFraction * peakMag;   // default is 20% of peak opening speed
+    const double noffsThreshold = m_noffsThresholdFraction * peakMag;
+    const double goffsThreshold = m_goffsThresholdFraction * peakMag;
 
     const int N = static_cast<int>(velocityData.size());
 
-    // 5) NOFFS: first time between MaxC and PVEL2 where v crosses +threshold upward
+    // 5) NOFFS: first time between MaxC and PVEL2 where v crosses +noffsThreshold upward
     //    (acceleration away from the target, out of the constriction).
     double noffs = std::numeric_limits<double>::quiet_NaN();
 
@@ -781,10 +803,10 @@ void Label::findFollowingVelocityExtremumFromVector(Label::landmarks &lm,
             if (!std::isfinite(currNorm) || !std::isfinite(nextNorm))
                 continue;
 
-            if (crossesUpInclusive(currNorm, nextNorm, threshold)) {
+            if (crossesUpInclusive(currNorm, nextNorm, noffsThreshold)) {
                 noffs = interpolateThresholdCrossing(i, i + 1,
                                                      currNorm, nextNorm,
-                                                     threshold, sr);
+                                                     noffsThreshold, sr);
                 break;
             }
         }
@@ -794,7 +816,7 @@ void Label::findFollowingVelocityExtremumFromVector(Label::landmarks &lm,
     // place NOFFS at MaxC.
     lm.NOFFS = std::isfinite(noffs) ? noffs : xCenterSec;
 
-    // 6) GOFFS: first time after PVEL2 where v crosses +threshold downward
+    // 6) GOFFS: first time after PVEL2 where v crosses +goffsThreshold downward
     //    (deceleration away from the target).
     double goffs = std::numeric_limits<double>::quiet_NaN();
 
@@ -805,10 +827,10 @@ void Label::findFollowingVelocityExtremumFromVector(Label::landmarks &lm,
         if (!std::isfinite(currNorm) || !std::isfinite(nextNorm))
             continue;
 
-        if (crossesDownInclusive(currNorm, nextNorm, threshold)) {
+        if (crossesDownInclusive(currNorm, nextNorm, goffsThreshold)) {
             goffs = interpolateThresholdCrossing(i, i + 1,
                                                  currNorm, nextNorm,
-                                                 threshold, sr);
+                                                 goffsThreshold, sr);
             break;
         }
     }
@@ -821,7 +843,8 @@ void Label::findFollowingVelocityExtremumFromVector(Label::landmarks &lm,
 void Label::findTangentialGestureLandmarksFromSpeed(Label::landmarks &lm,
                                                     double xCenterSec,
                                                     const std::vector<double> &speedData,
-                                                    double sr)
+                                                    double sr,
+                                                    double searchRadiusSec)
 {
     lm.MaxC = xCenterSec;
 
@@ -880,25 +903,14 @@ void Label::findTangentialGestureLandmarksFromSpeed(Label::landmarks &lm,
     // Limit how far the algorithm is allowed to look away from MaxC.
     // The goal is to find the adjacent closing/opening peaks, not a later
     // unrelated movement.
-    double searchSec = 0.30;
-
-    if (m_plot && m_plot->xAxis) {
-        const double visibleRange = m_plot->xAxis->range().size();
-
-        if (visibleRange > 0.0) {
-            searchSec = 0.25 * visibleRange;
-            searchSec = std::max(0.12, std::min(searchSec, 0.30));
-        }
-    }
-
     const int searchSamples =
-        std::max(5, static_cast<int>(std::round(searchSec * sr)));
+        std::max(5, static_cast<int>(std::round(searchRadiusSec * sr)));
 
     const int leftBound  = std::max(1, centerIndex - searchSamples);
     const int rightBound = std::min(N - 2, centerIndex + searchSamples);
 
     // Estimate how large a speed rise is available on each side.
-    // This is used only to reject tiny wiggles close to MaxC.
+    // Reject small speed fluctuations close to MaxC.
     double leftMax = centerSpeed;
     for (int i = centerIndex - 1; i >= leftBound; --i) {
         const double v = finiteSpeed(i);
@@ -917,14 +929,14 @@ void Label::findTangentialGestureLandmarksFromSpeed(Label::landmarks &lm,
         return;
 
     // A candidate PVEL must rise at least this much above the MaxC low-speed
-    // region. This rejects tiny local bumps.
+    // region. This rejects small local fluctuations.
     //
-    // m_velocityThresholdFraction is already 0.20 by default.
+    // Keep peak qualification fixed at 20%, independent of boundary settings.
     const double minLeftPeak =
-        centerSpeed + m_velocityThresholdFraction * (leftMax - centerSpeed);
+        centerSpeed + kTangentialPeakQualificationFraction * (leftMax - centerSpeed);
 
     const double minRightPeak =
-        centerSpeed + m_velocityThresholdFraction * (rightMax - centerSpeed);
+        centerSpeed + kTangentialPeakQualificationFraction * (rightMax - centerSpeed);
 
     // ------------------------------------------------------------
     // PVEL1: first strong local maximum immediately before MaxC.
@@ -1044,11 +1056,17 @@ void Label::findTangentialGestureLandmarksFromSpeed(Label::landmarks &lm,
 
     // Thresholds for target/release around the low-speed MaxC region.
     // For tangential speed, the baseline is centerSpeed, not zero.
-    const double threshold1 =
-        centerSpeed + m_velocityThresholdFraction * (pvel1Value - centerSpeed);
+    const double gonsThreshold =
+        centerSpeed + m_gonsThresholdFraction * (pvel1Value - centerSpeed);
 
-    const double threshold2 =
-        centerSpeed + m_velocityThresholdFraction * (pvel2Value - centerSpeed);
+    const double nonsThreshold =
+        centerSpeed + m_nonsThresholdFraction * (pvel1Value - centerSpeed);
+
+    const double noffsThreshold =
+        centerSpeed + m_noffsThresholdFraction * (pvel2Value - centerSpeed);
+
+    const double goffsThreshold =
+        centerSpeed + m_goffsThresholdFraction * (pvel2Value - centerSpeed);
 
     // ------------------------------------------------------------
     // GONS: crossing upward before PVEL1.
@@ -1061,8 +1079,8 @@ void Label::findTangentialGestureLandmarksFromSpeed(Label::landmarks &lm,
         if (!std::isfinite(prev) || !std::isfinite(curr))
             continue;
 
-        if (crossesUpInclusive(prev, curr, threshold1)) {
-            lm.GONS = interpolateCrossing(i - 1, i, threshold1);
+        if (crossesUpInclusive(prev, curr, gonsThreshold)) {
+            lm.GONS = interpolateCrossing(i - 1, i, gonsThreshold);
             break;
         }
     }
@@ -1083,8 +1101,8 @@ void Label::findTangentialGestureLandmarksFromSpeed(Label::landmarks &lm,
         if (!std::isfinite(curr) || !std::isfinite(next))
             continue;
 
-        if (crossesDownInclusive(curr, next, threshold1)) {
-            lm.NONS = interpolateCrossing(i, i + 1, threshold1);
+        if (crossesDownInclusive(curr, next, nonsThreshold)) {
+            lm.NONS = interpolateCrossing(i, i + 1, nonsThreshold);
             break;
         }
     }
@@ -1105,8 +1123,8 @@ void Label::findTangentialGestureLandmarksFromSpeed(Label::landmarks &lm,
         if (!std::isfinite(curr) || !std::isfinite(next))
             continue;
 
-        if (crossesUpInclusive(curr, next, threshold2)) {
-            lm.NOFFS = interpolateCrossing(i, i + 1, threshold2);
+        if (crossesUpInclusive(curr, next, noffsThreshold)) {
+            lm.NOFFS = interpolateCrossing(i, i + 1, noffsThreshold);
             break;
         }
     }
@@ -1127,8 +1145,8 @@ void Label::findTangentialGestureLandmarksFromSpeed(Label::landmarks &lm,
         if (!std::isfinite(curr) || !std::isfinite(next))
             continue;
 
-        if (crossesDownInclusive(curr, next, threshold2)) {
-            lm.GOFFS = interpolateCrossing(i, i + 1, threshold2);
+        if (crossesDownInclusive(curr, next, goffsThreshold)) {
+            lm.GOFFS = interpolateCrossing(i, i + 1, goffsThreshold);
             break;
         }
     }
@@ -1139,7 +1157,7 @@ void Label::findTangentialGestureLandmarksFromSpeed(Label::landmarks &lm,
         lm.GOFFS = rightBound / sr;
 }
 
-void Label::placeLabelAt(double x, QString labelName)
+void Label::placeLabelAt(double x, QString labelName, const QUuid &id)
 {
 
     if (!m_plot) return;
@@ -1173,11 +1191,12 @@ void Label::placeLabelAt(double x, QString labelName)
         const QString existingName =
             m_labelLineNameMap.value(existingLine);
 
-        // Only reject the exact same landmark on the same channel.
-        // Different landmarks are allowed to share the same timestamp.
-        if (existingLegend == legendName &&
-            existingName == labelName &&
-            qAbs(existingX - x) < DUPLICATE_EPSILON)
+        // Restored landmarks match by ID, even after a rename creates identical values.
+        // Fresh input retains the existing same-channel/name/time duplicate rule.
+        if ((!id.isNull() && m_labelLineIdMap.value(existingLine) == id) ||
+            (id.isNull() && existingLegend == legendName &&
+             existingName == labelName &&
+             qAbs(existingX - x) < DUPLICATE_EPSILON))
         {
             return;
         }
@@ -1190,6 +1209,7 @@ void Label::placeLabelAt(double x, QString labelName)
     labelLine->setSelectable(true);
     m_labelLines.append(labelLine);
     m_labelLineNameMap[labelLine] = labelName;
+    m_labelLineIdMap[labelLine] = id.isNull() ? QUuid::createUuid() : id;
 
     QCPItemText *labelText = new QCPItemText(m_plot);
     labelText->setPositionAlignment(Qt::AlignLeft | Qt::AlignBottom);
@@ -1216,11 +1236,11 @@ void Label::placeLabelAt(double x, QString labelName)
     m_labelHandleMapText[handleText] = labelLine;
     m_lineToBottomText[labelLine]    = labelText;
     m_labelLineLegendMap[labelLine] = legendName;
-    emit landmarkAdded(legendName, x, labelName);
+    emit landmarkAdded(legendName, x, labelName, m_labelLineIdMap.value(labelLine));
     m_plot->replot();
 }
 
-void Label::removeLabelAt(double x, const QString &legendName)
+void Label::removeLabel(const QUuid &id)
 {
     if (!m_plot || m_labelLines.isEmpty())
         return;
@@ -1241,26 +1261,21 @@ void Label::removeLabelAt(double x, const QString &legendName)
             m_plot->removeItem(it);
     };
 
-    static const double EPS = 1e-6;
-
-    // Find the exact matching line for this channel + offset
+    // Find the exact marker, including coincident landmarks.
     auto matchIt = std::find_if(
         m_labelLines.begin(), m_labelLines.end(),
         [&](QCPItemLine *line) {
             if (!line)
                 return false;
 
-            const QString lineLegend = m_labelLineLegendMap.value(line);
-            const double  lineX      = line->start->coords().x();
-
-            return (lineLegend == legendName && std::fabs(lineX - x) < EPS);
+            return !id.isNull() && m_labelLineIdMap.value(line) == id;
         });
 
     if (matchIt == m_labelLines.end())
         return;
 
     QCPItemLine *line = *matchIt;
-    const double lx   = line->start->coords().x();
+
 
     // Clear any selection/drag state tied to this line
     if (m_currentlySelectedLine == line)
@@ -1289,12 +1304,13 @@ void Label::removeLabelAt(double x, const QString &legendName)
     }
 
     // Clean maps and remove the line
+    m_labelLineIdMap.remove(line);
     m_labelLineNameMap.remove(line);
     m_labelLineLegendMap.remove(line);
     safeRemove(line);
     m_labelLines.erase(matchIt);
 
-    emit landmarkRemoved(lx);
+    emit landmarkRemoved(id);
 
     m_plot->replot();
 }
@@ -1321,7 +1337,7 @@ void Label::removeAllLabels()
     // Remove each line and its paired UI
     while (!m_labelLines.isEmpty()) {
         QCPItemLine *line = m_labelLines.takeFirst();
-        const double x = line->start->coords().x();
+        const QUuid id = m_labelLineIdMap.value(line);
 
         // Remove handles tied to this line
         for (auto it = m_labelHandleMapText.begin(); it != m_labelHandleMapText.end(); ) {
@@ -1340,11 +1356,12 @@ void Label::removeAllLabels()
         }
 
         // Clean maps and remove the line
+        m_labelLineIdMap.remove(line);
         m_labelLineNameMap.remove(line);
         m_labelLineLegendMap.remove(line);
         safeRemove(line);
 
-        emit landmarkRemoved(x);
+        emit landmarkRemoved(id);
     }
 
     // Safety passes (in case anything remained)
@@ -1356,6 +1373,7 @@ void Label::removeAllLabels()
     m_labelHandleMapText.clear();
 
     m_lineToBottomText.clear();
+    m_labelLineIdMap.clear();
     m_labelLineNameMap.clear();
     m_labelLineLegendMap.clear();
 
@@ -1366,14 +1384,15 @@ void Label::onItemClicked(QCPAbstractItem *item, QMouseEvent *event)
 {
     Q_UNUSED(event);
 
-    QCPItemText* clickedText = qobject_cast<QCPItemText*>(item);
+    QCPItemText* clickedText = m_isDragging && m_draggedHandle
+                                    ? m_draggedHandle : qobject_cast<QCPItemText*>(item);
     if (!clickedText) return;
 
     if (m_labelHandleMapText.contains(clickedText))
     {
         QCPItemLine* line = m_labelHandleMapText[clickedText];
 
-        // If an old selection exists but the line has been removed, just drop it.
+        // Clear a selection whose line has been removed.
         if (m_currentlySelectedLine && !m_labelLines.contains(m_currentlySelectedLine))
             m_currentlySelectedLine = nullptr;
 
@@ -1389,7 +1408,7 @@ void Label::onItemClicked(QCPAbstractItem *item, QMouseEvent *event)
 
         const QString legendName = m_labelLineLegendMap.value(line);
         const double  xCoord     = line->start->coords().x();
-        emit labelClicked(legendName, xCoord);
+        emit labelClicked(legendName, xCoord, m_labelLineIdMap.value(line));
 
         m_plot->replot();
     }
@@ -1414,15 +1433,11 @@ void Label::clearSelectedLine()
     m_plot->replot();
 }
 
-bool Label::selectLineIfMatch(const QString &legendName, double xOffset)
+bool Label::selectLine(const QUuid &id)
 {
-    for (auto it = m_labelLineLegendMap.constBegin(); it != m_labelLineLegendMap.constEnd(); ++it) {
+    for (auto it = m_labelLineIdMap.constBegin(); it != m_labelLineIdMap.constEnd(); ++it) {
         QCPItemLine *line = it.key();
-        const QString lineLegend = it.value();
-        const double  lineX      = line->start->coords().x();
-
-        static const double EPS = 1e-6;
-        if (lineLegend == legendName && std::fabs(lineX - xOffset) < EPS) {
+        if (!id.isNull() && it.value() == id) {
             clearSelectedLine();
             if (!m_labelLines.contains(line)) return false;
             line->setPen(QPen(Qt::red, 1.5));
@@ -1442,6 +1457,17 @@ void Label::onMousePress(QMouseEvent* event)
     if (event->button() != Qt::LeftButton) return;
 
     QCPAbstractItem* itemUnderMouse = m_plot->itemAt(event->pos(), true);
+    // A table-selected landmark must remain draggable when handles overlap.
+    if (m_currentlySelectedLine) {
+        for (auto it = m_labelHandleMapText.constBegin(); it != m_labelHandleMapText.constEnd(); ++it) {
+            if (it.value() == m_currentlySelectedLine) {
+                const double distance = it.key()->selectTest(event->position(), false);
+                if (distance >= 0 && distance <= m_plot->selectionTolerance())
+                    itemUnderMouse = it.key();
+                break;
+            }
+        }
+    }
     if (!itemUnderMouse) return;
 
     QCPItemText* handleText = qobject_cast<QCPItemText*>(itemUnderMouse);
@@ -1452,7 +1478,7 @@ void Label::onMousePress(QMouseEvent* event)
     m_draggedHandle= handleText;
     m_draggedLine  = m_labelHandleMapText[handleText];
 
-    // If the line got removed somehow, abort
+    // Abort if the selected line has been removed.
     if (!m_labelLines.contains(m_draggedLine)) {
         m_isDragging = false;
         m_draggedHandle = nullptr;
@@ -1501,7 +1527,7 @@ void Label::onMouseRelease(QMouseEvent* event)
     if (event->button() != Qt::LeftButton || !m_isDragging || !m_draggedLine)
         return;
 
-    // If the line was removed during drag, just reset state
+    // Reset the drag state if its line has been removed.
     if (!m_labelLines.contains(m_draggedLine)) {
         m_isDragging = false;
         m_draggedHandle = nullptr;
@@ -1521,7 +1547,7 @@ void Label::onMouseRelease(QMouseEvent* event)
     m_draggedLine   = nullptr;
 
     // Emit synchronously to avoid dangling captures if items get deleted immediately after
-    emit labelMoved(legendName, thisLabel, finalX, oldX);
+    emit labelMoved(legendName, thisLabel, finalX, oldX, m_labelLineIdMap.value(draggedLine));
 }
 
 void Label::moveHandleBy(QCPItemText *handle, double deltaX)
@@ -1545,15 +1571,15 @@ void Label::moveHandleBy(QCPItemText *handle, double deltaX)
         bottomText->setText(QString::number(newX, 'f', 2));
     }
 
+    emit labelMoved(m_labelLineLegendMap.value(line), m_labelLineNameMap.value(line),
+                    newX, oldX, m_labelLineIdMap.value(line));
     m_plot->replot();
 }
 
-void Label::updateLabelName(double x, const QString &actualName)
+void Label::updateLabelName(const QUuid &id, const QString &actualName)
 {
-    const double EPS = 1e-6;
     for (QCPItemLine *line : m_labelLines) {
-        const double lx = line->start->coords().x();
-        if (std::abs(lx - x) < EPS) {
+        if (!id.isNull() && m_labelLineIdMap.value(line) == id) {
             m_labelLineNameMap[line] = actualName;
             return;
         }

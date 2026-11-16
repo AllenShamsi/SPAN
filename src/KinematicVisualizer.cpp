@@ -116,7 +116,8 @@ KinematicVisualizer::~KinematicVisualizer() {
 void KinematicVisualizer::visualizeSignal(const QMap<QString, QVector<double>> &dataMap,
                                           const QString &configName,
                                           double penWidth,
-                                          int samplingRate)
+                                          int samplingRate,
+                                          const QString &yAxisTitle)
 {
     setupCustomPlot();
     customPlot->setFixedHeight(150);
@@ -180,7 +181,6 @@ void KinematicVisualizer::visualizeSignal(const QMap<QString, QVector<double>> &
             graph->setBrush(Qt::NoBrush);
             graph->setLineStyle(QCPGraph::lsLine);
 
-            // Avoid "Audio Audio" label duplication
             if (configName == key) graph->setName(configName);
             else                   graph->setName(configName);
 
@@ -266,7 +266,38 @@ void KinematicVisualizer::visualizeSignal(const QMap<QString, QVector<double>> &
         customPlot->xAxis2->setBasePen(QPen(Qt::black));
         customPlot->xAxis2->setTickPen(QPen(Qt::black));
         customPlot->xAxis2->setSubTickPen(QPen(Qt::black));
-    } else {
+    }
+
+    // Use consistent title styling for waveform and kinematic plots.
+    {
+        // Let QCustomPlot reserve space for both the title and the tick labels.
+        customPlot->axisRect()->setAutoMargins(QCP::msAll);
+        QFont titleFont = font();
+        titleFont.setPointSize(8);
+        customPlot->yAxis->setLabelFont(titleFont);
+        customPlot->yAxis->setLabelColor(QColor(45, 45, 45));
+        customPlot->yAxis->setLabelPadding(5);
+        // Vertical titles must fit the existing 150 logical-pixel plot height.
+        // Wrap words without reducing text size; Qt scales logical geometry at DPI.
+        const QFontMetrics metrics(titleFont);
+        const int maxLineWidth = customPlot->height() - 16;
+        QStringList lines;
+        QString line;
+        // The supported WAV import peak-normalizes samples before .span storage.
+        const QString title = isAudio ? QStringLiteral("Amplitude") :
+            (yAxisTitle.isEmpty() ? QStringLiteral("Value (unit unspecified)") : yAxisTitle);
+        for (const QString &word : title.split(QLatin1Char(' '))) {
+            const QString candidate = line.isEmpty() ? word : line + QLatin1Char(' ') + word;
+            if (!line.isEmpty() && metrics.horizontalAdvance(candidate) > maxLineWidth) {
+                lines.append(line);
+                line = word;
+            } else line = candidate;
+        }
+        if (!line.isEmpty()) lines.append(line);
+        customPlot->yAxis->setLabel(lines.join(QLatin1Char('\n')));
+    }
+
+    if (!isAudio) {
         // ---- 1) Sparse Y-axis ticks for kinematic plots ----
 
         customPlot->yAxis->setTicks(true);
@@ -381,11 +412,11 @@ void KinematicVisualizer::visualizeSpectrogram(
 {
     const double duration = std::max(0.0, tEnd - tStart);
 
-    // Did we already have a spectrogram and a meaningful x-range?
+    // Preserve the visible range when rebuilding an existing spectrogram.
     const bool hadSpectrogram =
         m_isSpectrogram && (m_spectrogramDuration > 0.0);
 
-    // Remember old x-range BEFORE resetting plot appearance
+    // Save the visible X range before resetting plot appearance.
     QCPRange oldRange = customPlot->xAxis->range();
 
     // Preserve the current vertical cursor line state, if one is visible
@@ -441,7 +472,7 @@ void KinematicVisualizer::visualizeSpectrogram(
     // Decide which x-range to use
     QCPRange xRangeToUse;
     if (hadSpectrogram) {
-        // Keep current zoom, just clamp to [specStart, specEnd]
+        // Clamp the current zoom to [specStart, specEnd].
         double lower = qMax(specStart, oldRange.lower);
         double upper = qMin(specEnd,   oldRange.upper);
         if (!(lower < upper)) {
@@ -473,7 +504,7 @@ void KinematicVisualizer::visualizeSpectrogram(
         }
     }
 
-    // Make sure it actually repaints now
+    // Repaint after rebuilding the spectrogram.
     customPlot->replot(QCustomPlot::rpQueuedReplot);
 }
 
@@ -562,7 +593,8 @@ bool KinematicVisualizer::eventFilter(QObject *object, QEvent *event) {
         if (auto *plot = qobject_cast<QCustomPlot*>(object))
             updateCursorItems(plot);
         if (selecting) onMouseDrag(); // live update while dragging
-        return true;
+        // Let QCustomPlot deliver handle moves to Label; other cursor moves stay here.
+        return !(m_label && m_label->isDragging());
     } else if (event->type() == QEvent::Leave) {
         hideAllVerticalLines();
         hideHorizontalCursor();
@@ -621,7 +653,7 @@ void KinematicVisualizer::setupCursorItems(QCustomPlot *plot) {
         // Use absolute (pixel) positioning
         coordText->position->setType(QCPItemPosition::ptAbsolute);
 
-        // The position we give later will be the *top-left* corner of the text box
+        // Position the text box by its top-left corner.
         coordText->setPositionAlignment(Qt::AlignLeft | Qt::AlignTop);
 
         // Inside that box, align text to the right so decimals line up
@@ -650,13 +682,13 @@ void KinematicVisualizer::updateCursorItems(QCustomPlot *plot)
 
     const double x = plot->xAxis->pixelToCoord(cursorPos.x());
     double y;
-    QString usedAxis;   // Which axis we actually tracked (may be empty)
+    QString usedAxis;   // Tracked axis; empty when tracking the mouse position.
 
     if (plot->property("isSpectrogram").toBool()) {
         // Spectrogram: always track raw mouse Y
         y = plot->yAxis->pixelToCoord(cursorPos.y());
     } else {
-        // Try to track data (honour radios + Auto)
+        // Select the tracked data axis from the tracking controls.
         y = getYValueFromSignal(x, &usedAxis);
 
         // If no axis was chosen, use raw mouse Y instead
@@ -695,7 +727,7 @@ void KinematicVisualizer::updateCursorItems(QCustomPlot *plot)
         const int frameWidth  = textRect.width()  + padding * 2;
         const int frameHeight = textRect.height() + padding * 2;
 
-        // LEFT edge of the box is a bit to the right of the cursor
+        // Place the text box to the right of the cursor.
         const int leftX = cursorPos.x() + 20;
         const int topY  = cursorPos.y();
 
@@ -760,6 +792,7 @@ void KinematicVisualizer::onAnyMousePress(QMouseEvent *event) {
     if (QCPAbstractItem* clicked = customPlot->itemAt(event->pos(), true)) {
         if (auto *textItem = qobject_cast<QCPItemText*>(clicked)) {
             if (m_label && m_label->isHandle(textItem)) {
+                selecting = false;
                 m_clickedHandle = textItem;
                 m_pressX = pressX;
                 event->accept();
@@ -778,9 +811,8 @@ void KinematicVisualizer::onAnyMousePress(QMouseEvent *event) {
 void KinematicVisualizer::onMouseRelease() {
     // Finish label-handle move
     if (m_clickedHandle) {
-        const double releaseX = customPlot->xAxis->pixelToCoord(cursorPos.x());
-        const double deltaX   = releaseX - m_pressX;
-        if (m_label) m_label->moveHandleBy(m_clickedHandle, deltaX);
+        // Label owns handle movement and emits the identity-bearing final position.
+        // Applying a displacement here would bypass that identity-bearing update.
         m_clickedHandle = nullptr;
         customPlot->replot(QCustomPlot::rpQueuedReplot);
         return;
@@ -808,7 +840,7 @@ void KinematicVisualizer::onMouseDrag() {
         if ((cursorPos - m_pressPos).manhattanLength() < dragThreshold)
             return;
 
-        // Keep the active plot rectangle pointer for existing logic
+        // Retain the active selection rectangle for subsequent updates.
         selectionRect = new QCPItemRect(customPlot);
         selectionRect->setLayer("overlay");
         selectionRect->setPen(QPen(Qt::NoPen));
@@ -994,6 +1026,8 @@ void KinematicVisualizer::setupCustomPlot() {
     customPlot->xAxis->setTickPen(Qt::NoPen);
     customPlot->xAxis->setSubTickPen(Qt::NoPen);
 
+    customPlot->yAxis->setLabel(QString()); // clear titles when reusing for audio/spectrogram
+
     // Hide Y ticks/labels; minimalist look
     customPlot->yAxis->setTicks(false);
     customPlot->yAxis->setTickLabels(false);
@@ -1001,7 +1035,7 @@ void KinematicVisualizer::setupCustomPlot() {
     customPlot->axisRect()->setAutoMargins(QCP::msTop | QCP::msRight | QCP::msBottom);
     customPlot->axisRect()->setMinimumMargins(QMargins(36, 0, 0, 0));
 
-    // Performance tweak
+    // Disable antialiasing to reduce plot rendering cost.
     customPlot->setNotAntialiasedElements(QCP::aeAll);
 
     // Reset spectrogram property
@@ -1159,4 +1193,3 @@ void KinematicVisualizer::updateSpectrogramColorScaleForRange(const QCPRange &vi
     m_spectrogramColorMap->setDataRange(QCPRange(lower, upper));
     customPlot->replot(QCustomPlot::rpQueuedReplot);
 }
- 

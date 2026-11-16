@@ -8,10 +8,9 @@
 struct GestureTemplateChannelData {
     QVector<double> samples;
 
-    // NEW: multi-anchor support
     QVector<int>    idxMaxCList;    // indices of all gesture anchors for this channel
 
-    // Optional: keep this for backward compatibility / debugging
+    // Retained for compatibility with single-anchor templates.
     int             idxMaxC = -1;   // first anchor or legacy single anchor
 
     bool            cfgX = false;

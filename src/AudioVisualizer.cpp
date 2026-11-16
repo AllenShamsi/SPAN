@@ -29,9 +29,8 @@ void AudioVisualizer::visualizeAudio(const std::vector<float> &data) {
 void AudioVisualizer::setupCustomPlot() {
     customPlot->clearPlottables();
     customPlot->xAxis->setLabel("Time");
-    // customPlot->yAxis->setLabel("Amplitude");
-    customPlot->yAxis->setTicks(false);            // Disable ticks on the y-axis
-    customPlot->yAxis->setTickLabels(false);       // Disable tick labels on the y-axis
+    customPlot->yAxis->setTicks(false);
+    customPlot->yAxis->setTickLabels(false);
 }
 
 void AudioVisualizer::plotAudioData() {

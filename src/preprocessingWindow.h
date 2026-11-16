@@ -146,7 +146,7 @@ private:
     QVector<QCheckBox*> checkBoxes;      // main enable per channel
     QVector<QComboBox*> comboBoxes;      // channel name per channel
 
-    // Dedicated BPL/BPF/BPR mapping combos (add to .ui)
+    // Dedicated bite-plane role selectors.
     QComboBox *bpLeftCombo  = nullptr;   // BP-L
     QComboBox *bpFrontCombo = nullptr;   // BP-F
     QComboBox *bpRightCombo = nullptr;   // BP-R

@@ -5,6 +5,7 @@
 #include <string>
 #include <map>
 #include <QString>
+#include "ChannelQuantity.h"
 
 enum class motionParam {
     Displacement,
@@ -47,6 +48,17 @@ struct spanFile {
     int numChannels;
 
     std::map<int, std::string> sensors;
+
+    // Runtime-only provenance, indexed like sensors (one-based). Unknown by default.
+    std::map<int, ChannelQuantity> channelQuantities;
+    ChannelQuantity channelQuantity(const std::string& name) const {
+        for (const auto& sensor : sensors) {
+            if (sensor.second != name) continue;
+            const auto it = channelQuantities.find(sensor.first);
+            return it == channelQuantities.end() ? ChannelQuantity{} : it->second;
+        }
+        return {};
+    }
 
     std::vector<float> audioData;
     std::vector<std::vector<posData>> channelsData;

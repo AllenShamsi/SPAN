@@ -1,4 +1,5 @@
 #include "FileInfoDialog.h"
+#include "UiAppearance.h"
 #include "ui_FileInfoDialog.h"
 
 #include <QFileInfo>
@@ -37,15 +38,13 @@ FileInfoDialog::FileInfoDialog(QWidget *parent)
 {
     ui->setupUi(this);
 
-    // Make sure the text edit is read-only
     ui->infoTextEdit->setReadOnly(true);
 
-    // 1) Tell the text edit it is allowed to grow
+    // Allow the text view to expand with the dialog.
     ui->infoTextEdit->setSizePolicy(QSizePolicy::Expanding,
                                     QSizePolicy::Expanding);
 
-    // 2) Ensure the dialog has a layout that contains the text edit
-    //    (if you didn’t set one in Designer, layout() will be nullptr)
+    // Create a layout if the UI file does not supply one.
     if (!layout()) {
         auto *v = new QVBoxLayout(this);
         v->setContentsMargins(0, 0, 0, 0);
@@ -53,8 +52,8 @@ FileInfoDialog::FileInfoDialog(QWidget *parent)
         setLayout(v);
     }
 
-    // Optional: nicer default size
     resize(400, 500);
+    UiAppearance::fitToScreen(*this);
 }
 
 FileInfoDialog::~FileInfoDialog()
@@ -192,7 +191,7 @@ void FileInfoDialog::setSpanFile(const spanFile &file)
         recipeBody.compare("None", Qt::CaseInsensitive) == 0 ||
         recipeBody.compare("None", Qt::CaseInsensitive) == 0 ||
         recipeBody.compare("None", Qt::CaseInsensitive) == 0) {
-        // (body in your header is " None", which becomes "None" after trimming)
+        // The header body " None" becomes "None" after trimming.
         text += "  (none)\n";
     } else {
         // Example body: " name: s1 s2 SUB; other: s3 s4 DIST;"
@@ -205,7 +204,7 @@ void FileInfoDialog::setSpanFile(const spanFile &file)
 
             int colonPos = seg.indexOf(':');
             if (colonPos <= 0) {
-                // Fallback: dump as-is
+                // Display unrecognized recipe text without parsing it.
                 text += "  " + seg + "\n";
                 continue;
             }

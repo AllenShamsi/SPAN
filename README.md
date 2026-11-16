@@ -1,10 +1,29 @@
 # SPAN
 
+Version 0.3.0.
+
 SPAN is a desktop application for preprocessing, visualizing, annotating, and exporting electromagnetic articulography (EMA) data together with synchronized audio.
 
-It is designed for workflows that begin with raw AG50x `.pos` and `.wav` recordings and continue through spatial correction, visualization, channel configuration, landmark annotation, and CSV export.
+It is intended for workflows that begin with raw AG50x `.pos` and `.wav` recordings and continue through spatial correction, visualization, landmark annotation, template-based labeling, and CSV export.
 
----
+## Windows portable use
+
+Extract the complete Windows portable archive for SPAN 0.3.0 to a writable
+directory and run SPAN.exe. Keep its DLLs and plugin subdirectories together. Qt or MSYS2
+installation is not required for the portable package; supported Windows x64,
+working graphics drivers, and an audio output device are needed for the
+corresponding features. Paths containing spaces are supported. Templates are
+located relative to the working directory, so start SPAN from its extracted
+folder. Do not copy SPAN.exe alone or merge it with an older distribution.
+
+Release notes and available downloads are provided on the GitHub Releases page:
+https://github.com/AllenShamsi/SPAN/releases
+
+See LICENSE.txt for the SPAN license. Third-party licensing information appears
+below, in the preserved source notices and in the respective dependency
+documentation. Verify portable builds on a clean Windows machine and
+representative hardware before distribution. User recordings and local templates
+are not included.
 
 ## Main workflow
 
@@ -14,18 +33,18 @@ A typical SPAN workflow is:
 2. Open `.span` files in the main window
 3. Configure kinematic channels for plotting
 4. Create derived channels if needed
-5. Place, inspect, adjust, and export landmarks
-6. Optionally load landmark positions from a `.csv` file onto the current `.span` file
+5. Place, adjust, and export landmarks
+6. Optionally save and apply templates across similar files
 
 ---
 
 ## Quick start
 
-## 1. Preprocess raw AG50x data into `.span`
+### 1. Preprocess raw AG50x data into `.span`
 
 Open the **Pre-processing Window**.
 
-1. Click **Select BP File (.pos)** and choose the bite-plane file.
+1. Click **Select BP File** and choose the bite-plane file.
 2. Click **Select Trial Files** and choose matching trial `.pos` and `.wav` files.
 3. In **Sensor Layout**, check the channels you want to use.
 4. Label the three reference channels exactly as:
@@ -37,208 +56,204 @@ Open the **Pre-processing Window**.
    - `BP-L`
    - `BP-F`
    - `BP-R`
-7. Click **Start** to compute and preview the corrected bite-plane view.
-8. Click **Proceed** once to preview corrected trial data.
-9. Click **Proceed** again to export `.span` files.
+7. In **Origin**, keep **BP centroid** or select a raw sensor whose mean position
+   in the bite-plane recording will define the coordinate origin.
+8. Click **Start** to compute and preview the corrected bite-plane view.
+9. Click **Proceed** once to preview corrected trial data.
+10. Click **Proceed** again to choose an output folder and export `.span` files.
 
-### Notes
+#### Notes
 - Trial `.pos` and `.wav` files must have matching base names.
 - The reference labels must appear exactly as `REF-L`, `REF-R`, and `REF-F`.
 - The bite-plane mapping must use three non-reference channels.
 
 ---
 
-## 2. Open and inspect files
+### 2. Open and inspect `.span` files
 
-In the main window, click **Add Files** to load one or more `.span` and/or `.csv` files.
-
-- Double-click a `.span` file, or select it and click **View**, to load it
-- Double-click a `.csv` file to place labels on the currently loaded `.span` file
-- Use **File Info** to inspect metadata for the currently loaded `.span` file
-
-When a `.span` file is loaded, SPAN displays:
-
-- the audio waveform
-- a spectrogram
-- configured kinematic plots
-- a landmark table
-- a 3D sensor view
+1. In the main window, click **Open**.
+2. Select one or more `.span` files.
+3. Double-click a file or click **View** to load it.
+4. Inspect the file using the waveform, spectrogram, kinematic plots, landmark table, and 3D sensor view.
 
 ---
 
-## 3. Configure channels for plotting
+### 3. Configure channels for plotting
 
-Use the configuration panel to choose which channels to display.
-
-1. Select a sensor from the channel list.
-2. Choose a motion type:
+1. Choose a sensor or derived signal.
+2. Select the motion type:
    - displacement
    - velocity
    - acceleration
-3. Choose the displayed dimensions:
+3. Choose the dimensions to display:
    - X
    - Y
    - Z
-4. Click **Add Config** to add the channel to the plot stack.
+4. Click **Add** to add the channel to the plot stack.
+5. Use the following controls to manage the configuration list:
+   - **Up**
+   - **Down**
+   - **Update**
+   - **Remove**
+   - **Apply to All**
 
-You can then manage the configuration list with:
-
-- **Move Up**
-- **Move Down**
-- **Update**
-- **Remove**
-- **Apply to All**
-- **Invert**
-
-### Notes
-- Configuration settings are stored in the `.span` file.
-- Updating a configuration changes how the signal is displayed, not the underlying stored positional data.
-- **Apply to All** writes the current configuration list to all loaded `.span` files.
-
-
-### Two-dimensional gesture views
-
-SPAN can display multiple dimensions from the same sensor in one configured plot. For example:
-
-- `TTz` displays tongue-tip vertical displacement
-- `TTx` displays tongue-tip horizontal displacement
-- `TTxz` displays tongue-tip X and Z displacement together
-- `TDxz` displays tongue-dorsum X and Z displacement together
-
-When exactly two displacement dimensions are selected, SPAN treats the plot as a two-dimensional gesture view. The visible traces remain positional traces, but assisted landmark placement can use a hidden tangential velocity basis.
-
-For example, for `TTxz`, SPAN uses: vTTtan = sqrt(vTTx^2 + vTTz^2)
-
-This is useful for gestures where movement may involve more than one spatial dimension, such as coronal tongue-tip gestures involving both raising and fronting/backing.
-
-The regular plotted value remains positional. For TTxz, the regular landmark-table Y value is anchored to the displayed position dimension, preferably z when z is present. Tangential velocity values are exported separately in the companion tangential-values CSV.
+Configuration settings are stored in the `.span` file without changing the underlying positional data.
 
 ---
 
-## 4. Create derived channels
-
-SPAN supports simple derived channels for custom measurements.
+### 4. Create derived channels
 
 1. Choose two input channels.
 2. Enter a name for the derived channel.
-3. Select an operation:
-   - **Subtract a component**
-   - **Compute Euclidean distance**
+3. Select an operation, such as:
+   - subtract component
+   - Euclidean distance
 4. Click **Derive**.
+5. Click **Clear** in the derived-channel section to remove all derived channels and reset the recipe line.
 
-Use **Clear All Derived** to remove all derived channels and reset the stored recipe.
-
-Derived channels can be useful for inter-articulator relationships, constriction proxies, and custom kinematic measures.
+Derived channels are useful for inter-articulator relationships, constriction proxies, and other custom kinematic measures.
 
 ---
 
-## 5. Landmark annotation
+### 5. Landmark annotation
 
-Landmarks can be placed directly on the plots and reviewed in the landmark table.
+#### Basic actions
+- **Right-click** on a plot to place a plain landmark.
+- **Shift + right-click** on a one-dimensional displacement trace to snap to a nearby displacement extremum and place `MaxC` with surrounding landmarks when velocity information is available.
+- For two-dimensional displacement configurations (XY, XZ or YZ), assisted placement uses tangential-speed minima and surrounding speed peaks while the visible traces remain positions.
+- Drag a landmark handle to move it.
+- Select landmarks in the landmark table to review or remove them.
 
-### Basic actions
-- Place landmarks directly on plots
-- Select landmarks in the landmark table to highlight them in the plots
-- Drag landmarks to adjust their timing
-- Rename landmarks in the landmark table
-- Remove selected landmarks with **Remove Landmark**
-- Remove all landmarks with **Clear All Landmarks**
+#### Derived landmarks
+When the appropriate velocity information is available, SPAN can derive additional landmarks such as:
+- `GONS`
+- `NONS`
+- `PVEL1`
+- `PVEL2`
+- `NOFFS`
+- `GOFFS`
 
-### Landmark table
+#### Independent velocity thresholds
+
+In Settings > Landmark Detection, set GONS, NONS, NOFFS, and GOFFS separately
+(1-50%, default 20% each). Click Apply to activate the settings for subsequent
+manual assisted, DTW-assisted, and batch annotation. Existing landmarks are not
+recalculated. Reset restores the displayed defaults; click Apply to activate them.
+Settings last for the current application session.
+
+For 1D gestures, each threshold is its percentage of the corresponding signed,
+sign-normalized velocity peak magnitude: closing for GONS/NONS, opening for
+NOFFS/GOFFS. For 2D displacement gestures, the level is speed at MaxC plus the
+selected percentage of the rise from that speed to the corresponding speed peak.
+The separate 2D peak-qualification fraction stays fixed at 20%. These settings
+do not alter MaxC or PVEL selection, search windows, interpolation, or fallbacks.
+The reopening deadband remains separate and applies to 1D excursion searches.
+
+#### DTW search context
+
+DTW-assisted 2D annotation uses a fixed 300-ms search radius on each side of
+the preserved MaxC anchor, bounded by the available full-resolution data.
+Zoom, viewport position, and display downsampling do not select this radius.
+The 300-ms implementation default preserves existing wide-view behavior; it
+is not a universally validated gestural duration. Manual 2D surrounding-landmark
+searches retain their viewport-dependent radius (120-300 ms). The 1D signed
+velocity algorithm is unchanged.
+
+#### Review of automatic landmarks
+
+DTW preserves the manager-refined MaxC time without a second snap. Automatically
+generated landmarks require analyst review: small local fluctuations may be
+eligible extrema, and a fixed window may include neighboring movement or exclude
+a later crossing. Existing fallback rules can supply an anchor, peak or boundary
+when its intended criterion is not found. Temporal ordering does not prove
+scientific validity. No automatic annotation-quality warning system is included.
+Coincident landmarks retain separate editing identities within the session,
+including after file switches. IDs are not added to CSV or .span files.
+
+#### Landmark table and export
 The landmark table stores:
-
 - landmark name
 - channel
 - time offset
 - Y value at the landmark location
 
-### CSV export
-Click **Export CSV** to save the current landmark table as a `.csv` file.
-
-The regular landmark CSV contains: Name,Channel,Offset,Y
-
-For ordinary one-dimensional traces, Y is the plotted value at the landmark time.
-
-For two-dimensional displacement gesture views such as TTxz, Y remains a positional display value. It is not the tangential velocity value. For TTxz, Y is anchored to TTz when z is one of the selected dimensions. If the current landmark table contains two-dimensional displacement gesture landmarks, SPAN also writes a companion file: *_tangential_values.csv. The companion file is generated from the same Export CSV action.
+Click **Export Landmarks** to save the landmark table as CSV for downstream analysis.
+For 2D displacement gestures, the companion tangential-values CSV provides speed
+values separately from the positional Y values in the regular landmark table.
 
 ---
 
-## 6. Load landmarks from CSV
+### 6. Templates and DTW-assisted annotation
 
-SPAN can place landmarks from a `.csv` file onto the currently loaded `.span` file.
+1. Load a `.span` exemplar.
+2. Place `MaxC` landmarks on the channels of interest.
+3. Click **Save template** to save a template `.json` file.
+4. Select the template and click **Apply** in the template section to transfer candidate landmarks to the current file.
+5. Click **Apply to ...** in the template section to process compatible files in the exemplar directory.
 
-Expected CSV header:
-
-```text
-Name,Channel,Offset
-```
-
-Each valid row is matched against the currently displayed channel names. Rows that do not match a current channel, or that duplicate an existing landmark at the same location, are ignored.
+Templates are intended for repeated annotation across structurally similar files. Candidate landmarks remain editable after transfer.
 
 ---
 
-## 7. Playback and navigation
+### 7. Spectrogram controls
 
-SPAN supports synchronized audio playback and plot navigation.
+Use the spectrogram controls to adjust:
+- analysis window size
+- maximum displayed frequency
+- dynamic range
 
-### Audio
-- **Play Sound** plays the full audio signal
-- **Play Selection** plays the current selected time region
-- **Stop** stops playback
+Click **Apply** to rebuild the spectrogram for the current visible range.
+Click **Reset** to restore and apply the default spectrogram settings.
 
-While audio is playing, the 3D sensor view updates over time.
+---
 
-### Navigation
-Use the plot controls to:
+## Keyboard shortcuts
 
-- zoom in
-- zoom out
-- zoom to selection
-- reset the full visible range
-- scroll horizontally through the signal
-
-You can also choose which plotted parameter is tracked in the display:
-- X
-- Y
-- Z
+- `Ctrl+O` — Open `.span` files
+- `Ctrl+Shift+P` — Open the preprocessing window
+- `Ctrl+I` — File info
+- `Space` — Start / stop audio playback (a new playback starts from the beginning)
+- `Shift+Space` — Play current selection
+- `Esc` — Stop playback
+- `Ctrl++` / `Ctrl+-` — Zoom in / out
+- `Ctrl+0` — Reset zoom
+- `Ctrl+E` — Export landmark CSV
+- `Ctrl+L` — Place landmarks from a selected CSV file
+- `Ctrl+Shift+L` — Clear all landmarks
+- `Ctrl+Shift+Up` / `Ctrl+Shift+Down` — Move config up / down
+- `Delete` — Remove the selected entry when the Files, landmarks or configured-channel table has focus
+- `Ctrl+Shift+I` — Invert selected configuration
+- `Ctrl+Shift+A` — Apply configuration to all files
+- `F1` — Help
 
 ---
 
 ## File formats
 
-## Input
+### Input
 SPAN works with:
-
 - raw AG50x `.pos` files
 - `.wav` audio files
 - previously created `.span` files
-- landmark `.csv` files
+- template `.json` files
 
-## Output
+### Output
 SPAN generates:
-
 - `.span` files
 - landmark `.csv` files
-- companion `*_tangential_values.csv` files when two-dimensional displacement gesture landmarks are present
+- template `.json` files
 
 ---
 
-## Third-party software
+## Help
 
-SPAN uses the following third-party software:
+Help is available through the **Help** menu, `F1`, and widget tooltips.
 
-### Qt
+---
 
-Qt provides the cross-platform application framework and user-interface components used by SPAN.
+## Third-party code
 
-- **Framework:** Qt 6
-- **Copyright:** The Qt Company Ltd. and other contributors
-- **Website:** https://www.qt.io/
-- **License:** Open-source Qt components are available under applicable GNU LGPL and/or GPL licenses
-
-### QCustomPlot
-
-QCustomPlot is used for 2D plotting and interactive signal visualization.
+SPAN includes third-party code from **QCustomPlot**, which is used for 2D plotting and interactive visualization.
 
 - **Component:** QCustomPlot
 - **Author:** Emanuel Eichhammer
@@ -246,21 +261,23 @@ QCustomPlot is used for 2D plotting and interactive signal visualization.
 - **Version:** 2.1.1
 - **License:** GNU General Public License v3 or later
 
-### FFTW
+The original copyright and license notice are preserved in qcustomplot.cpp and
+qcustomplot.h. SPAN also bundles **dr_wav v0.13.16** by **David Reid**, used to read
+WAV audio. Its public-domain / MIT No Attribution license alternatives and
+copyright notice are preserved in dr_wav.h.
 
-FFTW is used for frequency-domain signal processing.
+Additional build/runtime dependencies retain their own licenses:
 
-- **Website:** https://www.fftw.org/
-- **License:** GNU General Public License v2 or later
+| Dependency | Licensing reference |
+|---|---|
+| Qt, including Qt Data Visualization | Module-specific Qt licenses; Qt Data Visualization is available under GPLv3 or a commercial license: https://doc.qt.io/qt-6.10/qtdatavisualization-index.html |
+| Eigen | Primarily MPL-2.0, with per-file notices for additional code: https://libeigen.gitlab.io/ |
+| FFTW | GPLv2 or later for the open-source distribution: https://fftw.org/doc/License-and-Copyright.html |
+| PortAudio, by Ross Bencina and Phil Burk | MIT license: https://portaudio.com/license.html |
 
-### PortAudio
-
-PortAudio is used for audio playback.
-
-- **Website:** https://www.portaudio.com/
-- **License:** PortAudio open-source license
-
-Applicable copyright and license notices for third-party components are preserved with the distributed software and source code.
+These references summarize the dependencies and do not replace their full license
+texts or required notices. Retain the applicable dependency documentation and
+notices with distributed components, including the Windows runtime libraries.
 
 ---
 
@@ -268,13 +285,9 @@ Applicable copyright and license notices for third-party components are preserve
 
 SPAN is distributed under the **GNU General Public License v3.0 or later**.
 
-SPAN also uses third-party software components distributed under their respective licenses. Please preserve all applicable copyright, attribution, and license notices.
-
----
-
-## Source code
-
-The source code for SPAN is available from the SPAN GitHub repository.
+The full SPAN license is in LICENSE.txt. Preserve the original license headers and
+notices in the bundled QCustomPlot and dr_wav source files; third-party components
+retain their respective licenses.
 
 ---
 
@@ -283,3 +296,34 @@ The source code for SPAN is available from the SPAN GitHub repository.
 For bug reports, suggestions, or questions related to SPAN, contact:
 
 `allen.shamsi@gmail.com`
+
+## Automatic kinematic Y-axis titles
+
+Axis titles describe the calculated quantity separately from the channel legend.
+Recognized AG50xDATA_V002/V003 recordings preserve millimetre XYZ coordinates:
+preprocessing applies rigid transformations, without a length-unit conversion.
+Signed SUB differences and DIST Euclidean distances inherit these units. DIST
+stores its scalar result in X; its other components are padding, not distances.
+Velocity and acceleration use seconds (mm/s and mm/s squared). Multi-axis velocity
+is tangential speed; multi-axis acceleration is (a dot v)/speed, not |a|.
+Derivatives of distance are labeled Distance rate and Distance second derivative.
+Position plots remain Position even when annotation uses hidden tangential speed.
+A leading minus denotes display inversion. Plotted components may have vertical
+offsets for readability; full-resolution cursor values retain the original data.
+Runtime quantity metadata comes from the recognized source signature and SUB/DIST
+recipes. Unrecognized provenance, unsupported components and arbitrary numeric
+series receive Value (unit unspecified), rather than an assumed physical unit.
+Orientation (phi/theta) and RMS fields are retained but cannot currently be selected
+as kinematic plots; SPAN does not assign angular or RMS units to XYZ configurations.
+The audio waveform Y-axis is labeled **Amplitude**: WAV input is
+decoded to floats, stereo is averaged to mono, and samples are divided by the
+recording's maximum absolute amplitude (silence remains zero). Loaded .span audio
+is displayed as stored; externally edited files must preserve this convention.
+Audio retains its Time (s) axis and spectrogram behavior is unchanged. Titles wrap,
+and shared left margins keep audio and kinematic time axes aligned. Axis titles
+are presentation metadata and do not change signal values or file formats.
+
+Unit provenance: AG501 binary position coordinates are described as millimetres in
+Marinelli et al. (2023), https://doi.org/10.3390/s23239511 (section 3.2).
+External or edited files retaining an AG50x signature must preserve that convention;
+the legacy .span format has no field for declaring an alternative physical unit.

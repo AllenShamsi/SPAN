@@ -203,7 +203,7 @@ static std::vector<double> computeMagnitude(const fftw_complex* out, int size)
         const double re = out[i][0];
         const double im = out[i][1];
         const double mag = std::sqrt(re*re + im*im);
-        // log-scaled magnitude, like your original
+        // Log-scaled spectral magnitude.
         magnitudes[i] = 10.0 * std::log10(mag + 1.0);
     }
     return magnitudes;

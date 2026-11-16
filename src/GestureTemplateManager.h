@@ -27,8 +27,11 @@ public:
         // For each channel, all detected gesture center times (seconds)
         QMap<QString, QVector<double>> timesByChannel;
 
+        // Runtime-only diagnostic, keyed by final anchor time; not serialized.
+        QMap<QString, QMap<double, bool>> usedFallbackByChannel;
+
         QString error;
-        int appliedChannels = 0;   // number of channels that got ≥1 gesture
+        int appliedChannels = 0;   // Number of channels with at least one gesture.
 
         bool ok() const
         {
@@ -45,7 +48,6 @@ public:
                                     int uiMaxLen) const;
 
 private:
-    // existing stuff (m_templateDir, helpers, etc.)
     QString m_templateDir;
 
     bool saveTemplateToDisk(const GestureTemplate &tpl) const;

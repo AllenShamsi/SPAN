@@ -1,15 +1,16 @@
 cmake_minimum_required(VERSION 3.5)
 
-project(SPAN VERSION 0.2.0 LANGUAGES CXX)
+project(SPAN VERSION 0.3.0 LANGUAGES CXX)
 
 set(CMAKE_AUTOUIC ON)
+set(CMAKE_AUTOUIC_SEARCH_PATHS "${CMAKE_CURRENT_SOURCE_DIR}/src/ui")
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# ---------- Windows/MSYS2 defaults so GUI settings aren't required ----------
+# ---------- Default Windows/MSYS2 dependency locations ----------
 if (WIN32 AND MINGW)
   set(_MSYS2_PREFIX "C:/msys64/mingw64")
 
@@ -62,37 +63,39 @@ endif()
 # Sources
 # -------------------------
 set(PROJECT_SOURCES
-    main.cpp
-    mainWindow.cpp
-    mainWindow.h
-    mainWindow.ui
-    Sweep.h Sweep.cpp
-    preprocessingWindow.h
-    preprocessingWindow.cpp
-    preprocessingWindow.ui
-    OptionManager.h
-    OptionManager.cpp
-    Sensor3DVisualizer.h
-    Sensor3DVisualizer.cpp
-    SensorData.h
-    UtilityFunctions.h
-    UtilityFunctions.cpp
-    dr_wav.h
-    spanFile.h
-    AudioVisualizer.h
-    AudioVisualizer.cpp
-    qcustomplot.h
-    qcustomplot.cpp
-    KinematicVisualizer.h
-    KinematicVisualizer.cpp
-    ButterworthFilter.h
-    ButterworthFilter.cpp
+    src/main.cpp
+    src/UiAppearance.h src/UiAppearance.cpp
+    src/mainWindow.cpp
+    src/mainWindow.h
+    src/ui/mainWindow.ui
+    src/Sweep.h src/Sweep.cpp
+    src/preprocessingWindow.h
+    src/preprocessingWindow.cpp
+    src/ui/preprocessingWindow.ui
+    src/OptionManager.h
+    src/OptionManager.cpp
+    src/Sensor3DVisualizer.h
+    src/Sensor3DVisualizer.cpp
+    src/SensorData.h
+    src/UtilityFunctions.h
+    src/UtilityFunctions.cpp
+    third_party/dr_wav.h
+    src/spanFile.h
+    src/ChannelQuantity.h
+    src/AudioVisualizer.h
+    src/AudioVisualizer.cpp
+    third_party/qcustomplot.h
+    third_party/qcustomplot.cpp
+    src/KinematicVisualizer.h
+    src/KinematicVisualizer.cpp
+    src/ButterworthFilter.h
+    src/ButterworthFilter.cpp
 
-    QRangeSlider.h
-    QRangeSlider.cpp
-    label.h
-    label.cpp
-    MyQCPItemText.h
+    src/QRangeSlider.h
+    src/QRangeSlider.cpp
+    src/label.h
+    src/label.cpp
+    src/MyQCPItemText.h
 )
 
 if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
@@ -101,16 +104,16 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
         ${PROJECT_SOURCES}
         resources.qrc
         app.rc
-        FileInfoDialog.ui
-        FileInfoDialog.h
-        FileInfoDialog.cpp
-        GestureTemplate.h
-        GestureTemplateManager.h
-        GestureTemplateManager.cpp
-        SignalProcessing.h
-        SignalProcessing.cpp
-        SpanIO.h
-        SpanIO.cpp
+        src/ui/FileInfoDialog.ui
+        src/FileInfoDialog.h
+        src/FileInfoDialog.cpp
+        src/GestureTemplate.h
+        src/GestureTemplateManager.h
+        src/GestureTemplateManager.cpp
+        src/SignalProcessing.h
+        src/SignalProcessing.cpp
+        src/SpanIO.h
+        src/SpanIO.cpp
     )
 else()
     if(ANDROID)
@@ -126,24 +129,26 @@ if (WIN32)
 endif()
 
 
-# ---- MinGW fixes for "file too big" / "too many sections"
+# ---- MinGW object-file size and section limits ----
 if(MINGW AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
   # Ensure COFF big object format for all files in this target
   target_compile_options(SPAN PRIVATE -Wa,-mbig-obj)
   # Keep Debug builds smaller (section count & debug info)
   target_compile_options(SPAN PRIVATE
     $<$<CONFIG:Debug>:-g1 -fno-function-sections -fno-data-sections>)
-  # Heaviest TUs: go stricter to avoid section explosion
-  set_source_files_properties(qcustomplot.cpp UtilityFunctions.cpp PROPERTIES
+  # Reduce debug information and section splitting for large translation units.
+  set_source_files_properties(third_party/qcustomplot.cpp src/UtilityFunctions.cpp PROPERTIES
     COMPILE_OPTIONS "-Wa,-mbig-obj;-g0;-fno-function-sections;-fno-data-sections;-fno-ipa-cp;-fno-ipa-sra")
 endif()
 
 # Scope the QCustomPlot define to this target
-target_compile_definitions(SPAN PRIVATE QCUSTOMPLOT_USE_OPENGL)
+target_compile_definitions(SPAN PRIVATE QCUSTOMPLOT_USE_OPENGL SPAN_VERSION="${PROJECT_VERSION}")
 
 # Always-needed include dirs
 target_include_directories(SPAN PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/qcustomplot
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party
 )
 
 # Libraries common to all platforms
@@ -159,7 +164,7 @@ set(SPAN_LIBS
 if(QT_VERSION_MAJOR EQUAL 6)
   list(APPEND SPAN_LIBS Qt6::OpenGLWidgets)
 else()
-  # Qt5: link legacy OpenGL module for safety
+  # Qt5 uses the legacy OpenGL module.
   find_package(Qt5 COMPONENTS OpenGL REQUIRED)
   list(APPEND SPAN_LIBS Qt5::OpenGL)
 endif()

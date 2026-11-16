@@ -22,7 +22,8 @@ public:
     void visualizeSignal(const QMap<QString, QVector<double>> &dataMap,
                          const QString &configName,
                          double penWidth,
-                         int samplingRate);
+                         int samplingRate,
+                         const QString &yAxisTitle = QStringLiteral("Value (unit unspecified)"));
 
     void visualizeSpectrogram(const QVector<QVector<double>> &spectrogramData,
                               const QString &configName,
@@ -122,7 +123,7 @@ private:
     // Data helpers
     double getYValueFromSignal(double x, QString *usedAxis = nullptr);
 
-    // X-limits helpers (kept for future use / API symmetry)
+    // X-range limit helpers.
     void setZoomLimits(double minLimit, double maxLimit);
     bool isAtZoomOutLimit();
 
@@ -158,9 +159,8 @@ private:
     static QHash<QCustomPlot*, QCPItemText*>            globalSelectionRightLabels;
     static QHash<QCustomPlot*, QCPItemText*>            globalSelectionDistanceLabels;
 
-    // Optional: sync Y across all plots (utility kept; not auto-invoked)
+    // Explicit Y-axis synchronization; not enabled automatically.
     static void synchronizeYAxes();
 };
 
 #endif // KINEMATICVISUALIZER_H
- 

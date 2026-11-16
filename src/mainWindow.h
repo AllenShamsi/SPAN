@@ -96,14 +96,14 @@ private slots:
                                     const QItemSelection &deselected);
     void onLandmarkItemChanged(QStandardItem *item);
     void updateRemoveLandmarkButtonState();
-    void onLabelClicked(const QString &channelName, double offset);
+    void onLabelClicked(const QString &channelName, double offset, const QUuid &id);
     void onLabelMoved(const QString &channelName,
                       const QString &labelName,
                       double newX,
-                      double oldX);
+                      double oldX, const QUuid &id);
     void onLandmarkAddedFromLabel(const QString &channel,
                                   double offset,
-                                  const QString &lblName);
+                                  const QString &lblName, const QUuid &id);
     void placeLabelsButtonClicked();
 
     // Zoom/selection/scrollbar
@@ -155,7 +155,7 @@ private:
     void updateConfiguredChannelsListView();
     void clearAllPlots();
     void updateScrollBar();
-    void highlightLabelInPlot(const QString &channelName, double offset);
+    void highlightLabelInPlot(const QUuid &id);
 
     void buildSpectrogramForVisualizer(KinematicVisualizer *visualizer,
                                        const spanFile &data,
@@ -166,6 +166,7 @@ private:
 
     struct SessionLandmark
     {
+        QUuid id;
         QString name;
         QString channel;
         double offset = 0.0;
@@ -178,8 +179,9 @@ private:
     void syncGlobalLandmarkCounterFromModel();
 
     // Landmark helpers
-    void addLandmarkToModel(const QString &channel, double offset, const QString &lblName);
-    void removeLandmarkFromModel(double x);
+    void addLandmarkToModel(const QString &channel, double offset, const QString &lblName,
+                            const QUuid &id = QUuid());
+    int landmarkRowForId(const QUuid &id) const;
     void placeLandmark(const QString &channelName, double offset, const QString &labelName);
 
     // SPAN I/O & config lines
@@ -200,7 +202,10 @@ private:
 
     void updateSpectrogramColorScale();
 
-    double m_appliedVelocityThresholdFraction = 0.20;
+    double m_appliedGonsThresholdFraction = 0.20;
+    double m_appliedNonsThresholdFraction = 0.20;
+    double m_appliedNoffsThresholdFraction = 0.20;
+    double m_appliedGoffsThresholdFraction = 0.20;
     double m_appliedReopeningDeadbandFraction = 0.05;
 
     void applyLandmarkDetectionSettingsToAllLabels();

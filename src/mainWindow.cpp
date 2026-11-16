@@ -1,5 +1,6 @@
 // ------------------------ Project headers ------------------------
 #include "mainWindow.h"
+#include "UiAppearance.h"
 #include "ui_mainWindow.h"
 
 #include "SignalProcessing.h"
@@ -81,7 +82,7 @@ mainWindow::mainWindow(QWidget *parent)
     resetToDefaults();
 
     // ----- Annotate tab / template manager -----
-    // Where to store your template files on disk
+    // Store templates relative to the current working directory.
     m_templateManager->setTemplateDirectory(
         QDir::currentPath() + "/templates"
         );
@@ -100,7 +101,7 @@ mainWindow::mainWindow(QWidget *parent)
     // --- Keyboard Shortcuts / Actions ---
     using QS = QKeySequence;
 
-    // Helper to make an action quickly
+    // Create a shortcut action.
     auto addAct = [this](const QList<QKeySequence> &keys, auto slot) {
         QAction *a = new QAction(this);
         a->setShortcuts(keys);
@@ -115,7 +116,7 @@ mainWindow::mainWindow(QWidget *parent)
     addAct({QS(Qt::CTRL | Qt::SHIFT | Qt::Key_I)},     [this]{ invertButtonClicked(); });
     addAct({QS(Qt::CTRL | Qt::SHIFT | Qt::Key_A)},     [this]{ applyConfigToAllButtonClicked(); });
 
-    // ----- Context shortcuts on specific widgets (so Delete/Enter do the right thing) -----
+    // ----- Widget-specific Delete/Enter shortcuts -----
 
     // Files list: Delete = remove file(s)
     {
@@ -164,7 +165,7 @@ mainWindow::mainWindow(QWidget *parent)
     // ----- Rows (vertical header) -----
     if (auto *vHeader = lmView->verticalHeader()) {
         vHeader->setSectionResizeMode(QHeaderView::Fixed);
-        vHeader->setDefaultSectionSize(20);
+        vHeader->setDefaultSectionSize(qMax(20, lmView->fontMetrics().height() + 6));
     }
 
     connect(lmView->selectionModel(), &QItemSelectionModel::selectionChanged,
@@ -201,9 +202,7 @@ mainWindow::mainWindow(QWidget *parent)
     // ----- Rows (vertical header) -----
     if (auto *vHeader = filesView->verticalHeader()) {
         vHeader->setSectionResizeMode(QHeaderView::Fixed);   // no stretching
-        vHeader->setDefaultSectionSize(20);                  // pick your row height
-        // or, if you prefer auto height:
-        // vHeader->setSectionResizeMode(QHeaderView::ResizeToContents);
+        vHeader->setDefaultSectionSize(qMax(20, filesView->fontMetrics().height() + 6));
     }
 
     // Auto-size "File" and "Type" columns to contents once, then let user drag
@@ -231,7 +230,7 @@ mainWindow::mainWindow(QWidget *parent)
                 autoSizeFileTableColumns();
             });
 
-    // Selection handling (unchanged)
+    // Selection handling
     connect(ui->filesListView->selectionModel(), &QItemSelectionModel::selectionChanged,
             this, &mainWindow::updateRemoveSpanFilesButtonState);
 
@@ -388,11 +387,10 @@ mainWindow::mainWindow(QWidget *parent)
     }
 
     // ---------- Landmark threshold controls ----------
-    if (ui->landmarkThresholdSpinBox) {
-        ui->landmarkThresholdSpinBox->setRange(0.01, 0.50);
-        ui->landmarkThresholdSpinBox->setSingleStep(0.01);
-        ui->landmarkThresholdSpinBox->setValue(m_appliedVelocityThresholdFraction);
-    }
+    ui->gonsThresholdSpinBox->setValue(100.0 * m_appliedGonsThresholdFraction);
+    ui->nonsThresholdSpinBox->setValue(100.0 * m_appliedNonsThresholdFraction);
+    ui->noffsThresholdSpinBox->setValue(100.0 * m_appliedNoffsThresholdFraction);
+    ui->goffsThresholdSpinBox->setValue(100.0 * m_appliedGoffsThresholdFraction);
 
     if (ui->reopeningDeadbandSpinBox) {
         ui->reopeningDeadbandSpinBox->setRange(0.00, 0.20);
@@ -461,11 +459,11 @@ void mainWindow::syncAudioWidthToKinematicViewport()
 
     const int w = ui->scrollArea->viewport()->width();
 
-    // IMPORTANT: do NOT set fixed width (it pins the window's minimum width)
+    // Avoid a fixed width, which would prevent the window from shrinking.
     ui->audioContainer->setMinimumWidth(0);
     ui->audioContainer->setMaximumWidth(w);
 
-    // make sure it can shrink
+    // Allow the container to shrink within its layout.
     ui->audioContainer->setSizePolicy(QSizePolicy::Expanding,
                                       ui->audioContainer->sizePolicy().verticalPolicy());
 
@@ -494,6 +492,7 @@ void mainWindow::cacheCurrentLandmarksForSession()
             continue;
 
         SessionLandmark lm;
+        lm.id      = landmarkListModel->item(row, 0)->data(Qt::UserRole).toUuid();
         lm.name    = landmarkListModel->item(row, 0)->text();
         lm.channel = landmarkListModel->item(row, 1)->text();
         lm.offset  = offset;
@@ -528,7 +527,7 @@ void mainWindow::restoreSessionLandmarksForCurrentSpan()
                 continue;
 
             if (Label *lbl = visualizer->getLabel()) {
-                lbl->placeLabelAt(lm.offset, lm.name);
+                lbl->placeLabelAt(lm.offset, lm.name, lm.id);
             }
             break;
         }
@@ -577,7 +576,10 @@ void mainWindow::applyLandmarkDetectionSettingsToAllLabels()
         if (!lbl)
             continue;
 
-        lbl->setVelocityThresholdFraction(m_appliedVelocityThresholdFraction);
+        lbl->setVelocityThresholdFractions(m_appliedGonsThresholdFraction,
+                                         m_appliedNonsThresholdFraction,
+                                         m_appliedNoffsThresholdFraction,
+                                         m_appliedGoffsThresholdFraction);
         lbl->setReopeningDeadbandFraction(m_appliedReopeningDeadbandFraction);
     }
 }
@@ -596,8 +598,6 @@ void mainWindow::resetToDefaults()
         ui->dtwMaxLenSpinBox->setValue(5000);        // default max length
     }
 
-    // Later: if we add more user controls (checkboxes, other spin boxes, etc.),
-    // just set their defaults here as well.
 }
 
 void mainWindow::reloadTemplatesForCurrentDir()
@@ -1234,13 +1234,16 @@ void mainWindow::deriveButtonClicked() {
     // Store derived
     currentSpan->channelsData.push_back(derivedSignal);
     int newChannelIndex = static_cast<int>(currentSpan->channelsData.size());
+    currentSpan->channelQuantities[newChannelIndex] = derivedChannelQuantity(
+        currentSpan->channelQuantity(ch1.toStdString()),
+        currentSpan->channelQuantity(ch2.toStdString()), method.toStdString());
     currentSpan->sensors[newChannelIndex] = derivedChName.toStdString();
 
     updateRecipeLine(derivedChName, ch1, ch2, method);
 
     // Remember parents for color mixing
     m_derivedParents[derivedChName] = qMakePair(ch1, ch2);
-    m_configColorCache.remove(derivedChName); // just in case
+    m_configColorCache.remove(derivedChName); // Invalidate the derived-channel color cache.
 
     // Update UI lists
     ui->channelsComboBox->addItem(derivedChName);
@@ -1328,44 +1331,12 @@ double mainWindow::getLandmarkYValue(const QString &channelName, double offset) 
 void mainWindow::autoAnnotateChannelAtTime(const QString &channelName,
                                            double timeSeconds)
 {
-    if (timeSeconds < xAxisMinLimit)
-        timeSeconds = xAxisMinLimit;
-    if (timeSeconds > xAxisMaxLimit)
-        timeSeconds = xAxisMaxLimit;
-
     for (auto *visualizer : kinematicVisualizers) {
-        if (!visualizer)
+        if (!visualizer || visualizer->configName().trimmed() != channelName.trimmed())
             continue;
 
-        if (visualizer->configName().trimmed() != channelName.trimmed())
-            continue;
-
-        QCustomPlot *plot = visualizer->getCustomPlot();
-        if (!plot)
-            continue;
-
-        // Store the desired X (seconds) directly on the plot.
-        plot->setProperty("autoAnnotateX", timeSeconds);
-
-        const QRect ar = plot->axisRect()->rect();
-        const QPoint pos(ar.center().x(), ar.center().y());
-
-        const QPointF localPos(pos);
-        const QPointF globalPos(plot->mapToGlobal(pos));
-
-        QMouseEvent ev(QEvent::MouseButtonPress,
-                       localPos,
-                       globalPos,
-                       Qt::RightButton,
-                       Qt::RightButton,
-                       Qt::ShiftModifier);
-
-        QCoreApplication::sendEvent(plot, &ev);
-
-        // Label's handler already clears autoAnnotateX once it uses it,
-        // but this is harmless extra safety:
-        plot->setProperty("autoAnnotateX", QVariant());
-
+        if (Label *label = visualizer->getLabel())
+            label->annotateGestureAtTime(timeSeconds, Label::AnchorMode::PreserveRefinedAnchor);
         break;
     }
 }
@@ -1378,9 +1349,10 @@ void mainWindow::onSpecApplyButtonClicked()
 
 void mainWindow::onLandmarkDetectionApplyClicked()
 {
-    if (ui->landmarkThresholdSpinBox) {
-        m_appliedVelocityThresholdFraction = ui->landmarkThresholdSpinBox->value();
-    }
+    m_appliedGonsThresholdFraction = ui->gonsThresholdSpinBox->value() / 100.0;
+    m_appliedNonsThresholdFraction = ui->nonsThresholdSpinBox->value() / 100.0;
+    m_appliedNoffsThresholdFraction = ui->noffsThresholdSpinBox->value() / 100.0;
+    m_appliedGoffsThresholdFraction = ui->goffsThresholdSpinBox->value() / 100.0;
 
     if (ui->reopeningDeadbandSpinBox) {
         m_appliedReopeningDeadbandFraction = ui->reopeningDeadbandSpinBox->value();
@@ -1391,9 +1363,10 @@ void mainWindow::onLandmarkDetectionApplyClicked()
 
 void mainWindow::onLandmarkDetectionDefaultsClicked()
 {
-    if (ui->landmarkThresholdSpinBox) {
-        ui->landmarkThresholdSpinBox->setValue(0.20);
-    }
+    ui->gonsThresholdSpinBox->setValue(20.0);
+    ui->nonsThresholdSpinBox->setValue(20.0);
+    ui->noffsThresholdSpinBox->setValue(20.0);
+    ui->goffsThresholdSpinBox->setValue(20.0);
 
     if (ui->reopeningDeadbandSpinBox) {
         ui->reopeningDeadbandSpinBox->setValue(0.05);
@@ -1509,7 +1482,7 @@ void mainWindow::on_saveTemplateButton_clicked()
             cd.idxMaxCList.append(idx);
         }
 
-        // convenience single index (first MaxC) if you still use it anywhere
+        // Retain the first anchor for single-anchor template compatibility.
         cd.idxMaxC = cd.idxMaxCList.isEmpty() ? -1 : cd.idxMaxCList.first();
 
         tpl.channels.insert(chanName, cd);
@@ -1592,7 +1565,7 @@ void mainWindow::on_applyTemplateButton_clicked()
         return;
     }
 
-    // Turn the times into actual labels via your existing helper
+    // Place landmarks at the refined anchor times.
     for (auto it = res.timesByChannel.constBegin();
          it != res.timesByChannel.constEnd(); ++it)
     {
@@ -1600,7 +1573,7 @@ void mainWindow::on_applyTemplateButton_clicked()
         const QVector<double> times    = it.value();
 
         for (double t : times) {
-            // Let Label decide locally whether this is nearer a max or min.
+            // Preserve the manager-refined anchor; only derive surrounding landmarks.
             autoAnnotateChannelAtTime(chanName, t);
         }
     }
@@ -1751,7 +1724,7 @@ void mainWindow::on_batchApplyTemplateButton_clicked()
         return;
     }
 
-    // 2) Build list of target .span files in the SAME folder, from your list
+    // 2) Collect target .span files from the exemplar directory.
     QStringList targetFiles;
 
     // Prefer: selected rows in filesListView
@@ -1841,10 +1814,10 @@ void mainWindow::on_batchApplyTemplateButton_clicked()
                 .arg(fi.fileName())
             );
 
-        // Let the UI breathe and show progress in the window title
+        // Process events to update progress and respond to cancellation.
         QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
 
-        // User hit "Cancel"?
+        // Stop if the user canceled the batch.
         if (progress.wasCanceled()) {
             cancelled = true;
             failed << filePath + tr(" (cancelled by user)");
@@ -1862,7 +1835,7 @@ void mainWindow::on_batchApplyTemplateButton_clicked()
             continue;
         }
 
-        // Just to be explicit – loadSpanIntoUi already cleared plots/landmarks.
+        // Loading the file has already cleared its plots and landmarks.
         clearAllLandmarks();
 
         // Run DTW against this file
@@ -1880,7 +1853,7 @@ void mainWindow::on_batchApplyTemplateButton_clicked()
         }
 
         // Use the existing UI-based pipeline to create landmarks:
-        // this will internally fire Label logic via fake right-clicks.
+        // this preserves the manager-refined anchors without synthetic clicks.
         for (auto it = res.timesByChannel.constBegin();
              it != res.timesByChannel.constEnd(); ++it)
         {
@@ -1892,7 +1865,7 @@ void mainWindow::on_batchApplyTemplateButton_clicked()
             }
         }
 
-        // Let all landmarkAdded signals land in the model
+        // Process pending landmarkAdded signals before exporting the model.
         int lastCount = -1;
         for (int iter = 0; iter < 5; ++iter) {
             QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
@@ -1946,7 +1919,7 @@ void mainWindow::on_batchApplyTemplateButton_clicked()
         QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
     }
 
-    // Make sure the progress bar hits the end if we didn't cancel early
+    // Complete the progress indicator unless the batch was canceled.
     if (!cancelled)
         progress.setValue(total);
 
@@ -2129,9 +2102,6 @@ bool mainWindow::writeTangentialGestureValuesCsv(const QString &csvFilePath,
 
         // Only export the richer table for exactly two-dimensional gesture views.
         // Example: TTxz, TDxz, TBxz, TTxy.
-        //
-        // If you added isTwoDimensionalDisplacementGestureConfigName(...),
-        // use that helper instead of only checking dims.size().
         if (!isTwoDimensionalDisplacementGestureConfigName(channel))
             continue;
 
@@ -2305,8 +2275,7 @@ void mainWindow::removeSelectedLandmark()
     if (!idx.isValid())
         return;
 
-    const QString chan = idx.siblingAtColumn(1).data().toString();
-    const double  x    = idx.siblingAtColumn(2).data().toDouble();
+    const QUuid id = idx.siblingAtColumn(0).data(Qt::UserRole).toUuid();
 
     // Ask every label object to remove this exact landmark.
     for (auto v : kinematicVisualizers) {
@@ -2314,7 +2283,7 @@ void mainWindow::removeSelectedLandmark()
             continue;
 
         if (auto lbl = v->getLabel()) {
-            lbl->removeLabelAt(x, chan);
+            lbl->removeLabel(id);
             lbl->clearSelectedLine();
         }
 
@@ -2330,14 +2299,14 @@ void mainWindow::removeSelectedLandmark()
         enableConfigureTabButtons(false);
 }
 
-void mainWindow::removeLandmarkFromModel(double x) {
+int mainWindow::landmarkRowForId(const QUuid &id) const
+{
+    if (id.isNull()) return -1;
     for (int row = 0; row < landmarkListModel->rowCount(); ++row) {
-        QModelIndex idx = landmarkListModel->index(row, 2);
-        if (qAbs(idx.data().toDouble() - x) < 1e-6) {
-            landmarkListModel->removeRow(row);
-            break;
-        }
+        if (landmarkListModel->item(row, 0)->data(Qt::UserRole).toUuid() == id)
+            return row;
     }
+    return -1;
 }
 
 // ------------------------ Zoom / selection ------------------------
@@ -2493,7 +2462,7 @@ void mainWindow::rebuildSpectrogramForVisibleRange()
     double tStart = std::max(0.0, range.lower);
     double tEnd   = std::min(fullDuration, range.upper);
 
-    // If the range is too tiny or degenerate, just adjust color scale
+    // For a degenerate range, update only the color scale.
     if (!(tEnd > tStart + 1e-3)) {
         updateSpectrogramColorScale();
         return;
@@ -2532,7 +2501,7 @@ void mainWindow::updateSpectrogramColorScale()
     const QCPRange range = refPlot->xAxis->range();
 
     for (auto *visualizer : kinematicVisualizers) {
-        // We named the spectrogram visualizer "spectrogram" above
+        // Locate the visualizer registered as "spectrogram".
         if (visualizer->configName().compare("spectrogram", Qt::CaseInsensitive) == 0) {
             visualizer->updateSpectrogramColorScaleForRange(range);
             break;
@@ -2807,7 +2776,10 @@ void mainWindow::visualizeSignal(spanFile &data) {
             connect(label, &Label::labelMoved,    this, &mainWindow::onLabelMoved, Qt::DirectConnection);
             m_allLabels.push_back(label);
 
-            label->setVelocityThresholdFraction(m_appliedVelocityThresholdFraction);
+            label->setVelocityThresholdFractions(m_appliedGonsThresholdFraction,
+                                         m_appliedNonsThresholdFraction,
+                                         m_appliedNoffsThresholdFraction,
+                                         m_appliedGoffsThresholdFraction);
             label->setReopeningDeadbandFraction(m_appliedReopeningDeadbandFraction);
         }
 
@@ -3045,7 +3017,14 @@ void mainWindow::visualizeSignal(spanFile &data) {
             if (config.z) posDataMap["Z"] = posZ;
         }
 
-        visualizer->visualizeSignal(posDataMap, config.name, 2, data.wavSR);
+        const unsigned selectedComponents = (config.x ? 1u : 0u) |
+                                            (config.y ? 2u : 0u) |
+                                            (config.z ? 4u : 0u);
+        const int derivativeOrder = config.param == motionParam::Velocity ? 1 :
+                                    config.param == motionParam::Acceleration ? 2 : 0;
+        const auto quantity = data.channelQuantity(it->second);
+        visualizer->visualizeSignal(posDataMap, config.name, 2, data.wavSR,
+            kinematicAxisTitle(quantity, derivativeOrder, selectedComponents, invertThis));
         enableHorizontalWheelZoom(visualizer->getCustomPlot());
 
         ui->posPlotVL->addWidget(visualizer);
@@ -3057,12 +3036,26 @@ void mainWindow::visualizeSignal(spanFile &data) {
             connect(label, &Label::labelMoved,    this, &mainWindow::onLabelMoved, Qt::DirectConnection);
             m_allLabels.push_back(label);
 
-            label->setVelocityThresholdFraction(m_appliedVelocityThresholdFraction);
+            label->setVelocityThresholdFractions(m_appliedGonsThresholdFraction,
+                                         m_appliedNonsThresholdFraction,
+                                         m_appliedNoffsThresholdFraction,
+                                         m_appliedGoffsThresholdFraction);
             label->setReopeningDeadbandFraction(m_appliedReopeningDeadbandFraction);
         }
     }
 
     if (!kinematicVisualizers.isEmpty()) {
+        // Keep the stacked time axes aligned as titles/tick widths vary.
+        auto *leftMargins = new QCPMarginGroup(kinematicVisualizers.first()->getCustomPlot());
+        for (auto *v : kinematicVisualizers) {
+            auto *plot = v->getCustomPlot();
+            plot->axisRect()->setAutoMargins(plot->axisRect()->autoMargins() | QCP::msLeft);
+            plot->axisRect()->setMarginGroup(QCP::msLeft, leftMargins);
+            plot->plotLayout()->update(QCPLayoutElement::upPreparation);
+        }
+        for (auto *v : kinematicVisualizers)
+            v->getCustomPlot()->replot(QCustomPlot::rpQueuedReplot);
+
         xAxisMinLimit = kinematicVisualizers.first()->getXAxisMinLimit();
         xAxisMaxLimit = kinematicVisualizers.first()->getXAxisMaxLimit();
         updateScrollBar();
@@ -3071,8 +3064,9 @@ void mainWindow::visualizeSignal(spanFile &data) {
 
 void mainWindow::addLandmarkToModel(const QString &channel,
                                     double offset,
-                                    const QString &lblName)
+                                    const QString &lblName, const QUuid &id)
 {
+    if (landmarkRowForId(id) >= 0) return;
     QString finalName = lblName;
     if (finalName.isEmpty())
         finalName = QStringLiteral("name%1").arg(globalNameCounter++);
@@ -3091,6 +3085,8 @@ void mainWindow::addLandmarkToModel(const QString &channel,
           << new QStandardItem(std::isfinite(yValue)
                                    ? QString::number(yValue, 'f', 6)
                                    : QString());
+
+    items[0]->setData(id.isNull() ? QUuid::createUuid() : id, Qt::UserRole);
 
     items[1]->setFlags(items[1]->flags() & ~Qt::ItemIsEditable);
     items[2]->setFlags(items[2]->flags() & ~Qt::ItemIsEditable);
@@ -3227,7 +3223,7 @@ void mainWindow::showFileInfoDialog()
 
     FileInfoDialog dlg(this);
     dlg.setSpanFile(*currentSpan);
-    dlg.exec();   // modal; use dlg.show() if you prefer modeless
+    dlg.exec();   // Display the dialog modally.
 }
 
 // ------------------------ File management ------------------------
@@ -3256,9 +3252,8 @@ void mainWindow::addSpanButtonClicked() {
             nameItem->setData(fileName, Qt::UserRole);   // full path stored here
             nameItem->setFlags(nameItem->flags() & ~Qt::ItemIsEditable);
 
-            // Tooltip: full name (or full path if you prefer)
+            // Use the file name as the tooltip.
             nameItem->setData(fileInfo.fileName(), Qt::ToolTipRole);
-            // or: nameItem->setData(fileName, Qt::ToolTipRole); // full path
 
             // Format timestamp
             const QString ts = fileInfo.lastModified().toString("yyyy-MM-dd HH:mm:ss");
@@ -3493,7 +3488,7 @@ void mainWindow::removeSelectedSpanFiles() {
     auto *sel = ui->filesListView->selectionModel();
     if (!sel) return;
 
-    QModelIndexList selectedRows = sel->selectedRows();  // <--- rows only
+    QModelIndexList selectedRows = sel->selectedRows();  // Select rows rather than individual cells.
     if (selectedRows.isEmpty()) return;
 
     std::sort(selectedRows.begin(), selectedRows.end(),
@@ -3509,7 +3504,6 @@ void mainWindow::removeSelectedSpanFiles() {
         spanFilesListModel->removeRow(row);
     }
 
-    // The rest of your logic for currentSpan, clearAllPlots(), etc. stays as-is
     if (currentSpan) {
         auto it = std::find(spanFilesNames.begin(), spanFilesNames.end(),
                             QString::fromStdString(currentSpan->path));
@@ -3681,7 +3675,7 @@ void mainWindow::updateSensor3DAt(double timeSeconds)
         sd.phi   = static_cast<float>(p.phi);
         sd.theta = static_cast<float>(p.theta);
         sd.rms   = static_cast<float>(p.rms);
-        sd.extra = 0.0f;      // if you have 'extra' in sampleData
+        sd.extra = 0.0f;      // No auxiliary value is available in posData.
 
         ch.samples.push_back(sd);
 
@@ -3813,7 +3807,9 @@ void mainWindow::placeLabelsButtonClicked()
         for (int r = 0; r < landmarkListModel->rowCount(); ++r) {
             QString existingChannel = landmarkListModel->item(r, 1)->text();
             double existingOffset   = landmarkListModel->item(r, 2)->text().toDouble();
-            if (existingChannel == channel && qAbs(existingOffset - offset) < 1e-6) {
+            if (existingChannel == channel &&
+                landmarkListModel->item(r, 0)->text() == csvLabelName &&
+                qAbs(existingOffset - offset) < 1e-6) {
                 rowAlreadyExists = true;
                 break;
             }
@@ -3850,25 +3846,13 @@ void mainWindow::placeLabelsButtonClicked()
 
 void mainWindow::placeLandmark(const QString &channelName, double offset, const QString &labelName)
 {
-    Label *labelPtr = nullptr;
     for (auto *visualizer : kinematicVisualizers) {
-        labelPtr = visualizer->getLabel();
-        if (labelPtr) break;
+        if (visualizer->configName() == channelName) {
+            if (Label *label = visualizer->getLabel())
+                label->placeLabelAt(offset, labelName);
+            break;
+        }
     }
-    if (!labelPtr) return;
-
-    labelPtr->placeLabelAt(offset, QString());
-
-    QList<QStandardItem *> items;
-    QStandardItem *itemName    = new QStandardItem(labelName.isEmpty() ? "Unnamed" : labelName);
-    QStandardItem *itemChannel = new QStandardItem(channelName);
-    QStandardItem *itemOffset  = new QStandardItem(QString::number(offset, 'f', 6));
-    itemChannel->setFlags(itemChannel->flags() & ~Qt::ItemIsEditable);
-    itemOffset->setFlags(itemOffset->flags() & ~Qt::ItemIsEditable);
-    items << itemName << itemChannel << itemOffset;
-    landmarkListModel->appendRow(items);
-
-    enableConfigureTabButtons(true);
 }
 
 // ------------------------ Double click ------------------------
@@ -3930,7 +3914,7 @@ bool mainWindow::loadSpanIntoUi(const QString &filePath)
     // Invalidate spectrogram cache for the new file
     m_specCacheValid = false;
 
-    // 2D plots now use the same colors via colorForConfig()
+    // Share the sensor palette with 2D plots through colorForConfig().
     visualizeSignal(*currentSpan);
     updateComboBox();
     updateConfiguredChannelsListView();
@@ -3965,7 +3949,7 @@ void mainWindow::viewSpanFile()
         return;
     }
 
-    // use selectedRows() now that it's a table
+    // Read the selection by row.
     const QModelIndexList selected = selModel->selectedRows();
     if (selected.isEmpty()) {
         QMessageBox::warning(this, "No Selection",
@@ -4124,14 +4108,13 @@ void mainWindow::onRadioButtonClicked(QAbstractButton*)
 {
     if (!currentSpan) return;
 
-    // NEW: If user is preparing to ADD a channel (channelsComboBox != empty),
-    // do NOT mutate the selected configured channel.
+    // In add mode, leave the selected configured channel unchanged.
     if (ui->channelsComboBox->currentIndex() > 0) {
         // Add mode → radios are only used by addConfigButtonClicked().
         return;
     }
 
-    // Edit mode → ok to update the selected configured item.
+    // In edit mode, update the selected configuration.
     const auto idx = ui->configuredChannelsListView->currentIndex();
     if (!idx.isValid()) return;
 
@@ -4384,7 +4367,7 @@ void mainWindow::setButtonsEnabled(bool enabled) {
 
 // ------------------------ Label interactions ------------------------
 
-void mainWindow::onLabelClicked(const QString &channelName, double offset)
+void mainWindow::onLabelClicked(const QString &channelName, double offset, const QUuid &id)
 {
     Label* sendingLabel = qobject_cast<Label*>(sender());
     if (!sendingLabel) return;
@@ -4393,16 +4376,13 @@ void mainWindow::onLabelClicked(const QString &channelName, double offset)
         if (lbl != sendingLabel) lbl->clearSelectedLine();
     }
 
-    for (int row = 0; row < landmarkListModel->rowCount(); ++row) {
-        QString modelChannel = landmarkListModel->item(row, 1)->text();
-        double modelOffset   = landmarkListModel->item(row, 2)->text().toDouble();
-
-        if (modelChannel == channelName && qAbs(modelOffset - offset) < 1e-5) {
-            ui->landmarkListView->clearSelection();
-            ui->landmarkListView->selectRow(row);
-            ui->landmarkListView->scrollTo(landmarkListModel->index(row, 0));
-            break;
-        }
+    Q_UNUSED(channelName);
+    Q_UNUSED(offset);
+    const int row = landmarkRowForId(id);
+    if (row >= 0) {
+        ui->landmarkListView->clearSelection();
+        ui->landmarkListView->selectRow(row);
+        ui->landmarkListView->scrollTo(landmarkListModel->index(row, 0));
     }
 }
 
@@ -4414,16 +4394,14 @@ void mainWindow::onLandmarkSelectionChanged(const QItemSelection &selected,
 
     QModelIndex currentIndex = selected.indexes().first();
     int row = currentIndex.row();
-    QString channelName = landmarkListModel->item(row, 1)->text();
-    double offset = landmarkListModel->item(row, 2)->text().toDouble();
-    highlightLabelInPlot(channelName, offset);
+    highlightLabelInPlot(landmarkListModel->item(row, 0)->data(Qt::UserRole).toUuid());
 }
 
-void mainWindow::highlightLabelInPlot(const QString &channelName, double offset)
+void mainWindow::highlightLabelInPlot(const QUuid &id)
 {
     for (Label* lbl : m_allLabels) lbl->clearSelectedLine();
     for (Label* lbl : m_allLabels) {
-        if (lbl->selectLineIfMatch(channelName, offset)) break;
+        if (lbl->selectLine(id)) break;
     }
 }
 
@@ -4436,36 +4414,11 @@ void mainWindow::updateRemoveLandmarkButtonState()
 void mainWindow::onLabelMoved(const QString &channelName,
                               const QString &labelName,
                               double newX,
-                              double oldX)
+                              double oldX, const QUuid &id)
 {
     Q_UNUSED(labelName);
-    const double EPS = 1e-6;
-
-    // Primary: find the row that matches the SAME channel and the OLD offset.
-    int targetRow = -1;
-    for (int row = 0; row < landmarkListModel->rowCount(); ++row) {
-        const QString chan = landmarkListModel->item(row, 1)->text();
-        const double  off  = landmarkListModel->item(row, 2)->text().toDouble();
-        if (chan == channelName && std::abs(off - oldX) < EPS) {
-            targetRow = row;
-            break;
-        }
-    }
-
-    // Fallback (very unlikely): if not found, choose the best match among same channel+name,
-    //    i.e., the one whose offset is closest to oldX. This avoids silent failure if rounding differs.
-    if (targetRow == -1) {
-        double bestDist = std::numeric_limits<double>::max();
-        for (int row = 0; row < landmarkListModel->rowCount(); ++row) {
-            const QString nm   = landmarkListModel->item(row, 0)->text();
-            const QString chan = landmarkListModel->item(row, 1)->text();
-            const double  off  = landmarkListModel->item(row, 2)->text().toDouble();
-            if (chan == channelName && nm == labelName) {
-                const double d = std::abs(off - oldX);
-                if (d < bestDist) { bestDist = d; targetRow = row; }
-            }
-        }
-    }
+    Q_UNUSED(oldX);
+    const int targetRow = landmarkRowForId(id);
 
     if (targetRow != -1) {
         landmarkListModel->item(targetRow, 2)->setText(QString::number(newX, 'f', 6));
@@ -4494,17 +4447,9 @@ void mainWindow::onLandmarkItemChanged(QStandardItem *item)
         return;
     }
 
-    int row = item->row();
-    QString channel = landmarkListModel->item(row, 1)->text();
-    double offset   = landmarkListModel->item(row, 2)->text().toDouble();
-
-    for (Label* label : m_allLabels) {
-        QCustomPlot* plot = label->getPlot();
-        if (plot && plot->graphCount() > 0 && plot->graph(0)->name() == channel) {
-            label->updateLabelName(offset, newName);
-            break;
-        }
-    }
+    const QUuid id = item->data(Qt::UserRole).toUuid();
+    for (Label* label : m_allLabels)
+        label->updateLabelName(id, newName);
 }
 
 std::vector<double> mainWindow::getPrecomputedVelocity(const QString &legendName) {
@@ -4514,7 +4459,7 @@ std::vector<double> mainWindow::getPrecomputedVelocity(const QString &legendName
 }
 
 
-// New: return |v_xy| series for the given config/sensor name.
+// Return the cached or computed |v_xy| series for a config/sensor name.
 // If not cached yet, compute-once and cache under both the exact key and its base sensor key.
 std::vector<double> mainWindow::getPrecomputedTangentialVelocity(
     const QString& configOrSensorName)
@@ -4600,7 +4545,7 @@ std::vector<double> mainWindow::getPrecomputedSpeedXY(
 
 void mainWindow::onLandmarkAddedFromLabel(const QString &channel,
                                           double offset,
-                                          const QString &lblName)
+                                          const QString &lblName, const QUuid &id)
 {
     Label* sendingLabel = qobject_cast<Label*>(sender());
     if (!sendingLabel) return;
@@ -4608,8 +4553,8 @@ void mainWindow::onLandmarkAddedFromLabel(const QString &channel,
     QString finalName = lblName;
     if (finalName.isEmpty()) finalName = QString("name%1").arg(globalNameCounter++);
 
-    addLandmarkToModel(channel, offset, finalName);
-    sendingLabel->updateLabelName(offset, finalName);
+    addLandmarkToModel(channel, offset, finalName, id);
+    sendingLabel->updateLabelName(id, finalName);
 }
 
 // ------------------------ Invert channel ------------------------
@@ -4789,9 +4734,10 @@ void mainWindow::setupMenus()
         QMessageBox::information(
             this,
             tr("About SPAN"),
-            tr("SPAN\n\n"
+            tr("SPAN %1\n\n"
                "Software for preprocessing, viewing, annotating, and exporting EMA-based speech data.\n\n"
                "For bug reports, suggestions, or other questions, contact: allen.shamsi@gmail.com")
+                .arg(QCoreApplication::applicationVersion())
             );
     });
 
@@ -4857,6 +4803,19 @@ QString mainWindow::buildHelpHtml() const
         If a control or menu item is disabled, it usually means that no valid file is currently loaded
         or that the current file does not support that action.
         </p>
+
+        <p><b>Kinematic Y-axis titles</b> describe the calculation, separately from the
+        channel name. Recognized AG50x coordinates retain millimetres (mm). Signed
+        differences and Euclidean distances retain those units; distance is stored
+        in X only. Component velocity uses mm/s and acceleration uses mm/s squared.
+        Multi-axis velocity is tangential speed; multi-axis acceleration is
+        tangential acceleration (a dot v divided by speed), not acceleration magnitude.
+        Multi-axis position plots remain position plots even when annotation uses
+        hidden tangential speed. A leading minus indicates display inversion.
+        Traces may be vertically offset for readability; cursor values retain the
+        original values. Unknown provenance or unsupported components are labeled
+        Value (unit unspecified). Orientation and RMS fields are retained in files
+        but are not offered as kinematic plot configurations.</p>
 
         <h3>2. Main analysis views</h3>
         <ul>
@@ -5011,6 +4970,43 @@ QString mainWindow::buildHelpHtml() const
         not the tangential velocity value.
         </p>
 
+        <p>
+        In Settings &gt; Landmark Detection, GONS, NONS, NOFFS, and GOFFS have independent
+        velocity thresholds (1–50%, default 20% each). Click Apply to use the displayed
+        settings for subsequent assisted annotation, including DTW and batch annotation.
+        Existing landmarks are not recalculated. Reset restores the displayed defaults;
+        click Apply to activate them. Settings last for the current application session.
+        </p>
+        <p>
+        For one-dimensional gestures, GONS/NONS use their respective percentages of the
+        closing peak magnitude and NOFFS/GOFFS use the opening peak magnitude, after sign
+        normalization. For two-dimensional displacement gestures, each threshold is
+        speed at MaxC plus its percentage of the rise from that speed to the corresponding
+        peak. The separate 2D peak-qualification fraction remains fixed at 20%.
+        These controls do not change MaxC or PVEL selection. The reopening deadband remains
+        separate and applies to the one-dimensional velocity-excursion searches.
+        </p>
+
+        <p>
+        DTW-assisted annotation preserves the MaxC time refined by the template manager;
+        it does not snap that anchor a second time during landmark placement. For 2D
+        displacement gestures, surrounding landmarks use a fixed 300-ms search radius
+        on each side of MaxC, clipped to the available full-resolution data. Plot zoom,
+        viewport position, and display downsampling do not change those DTW landmarks.
+        Manual Shift-right-click retains its existing snapping and viewport-dependent
+        2D radius (120-300 ms); the 1D signed-velocity algorithm is unchanged.
+        </p>
+        <p>
+        The 300-ms radius is an implementation default chosen to preserve previous
+        wide-view behavior, not a universally validated gestural duration.
+        <b>Analyst review is required for automatically generated landmarks.</b>
+        Local speed fluctuations can resemble targets, and nearby gestures can affect
+        peak selection. If an eligible extremum, qualifying peak, or threshold crossing
+        is absent within the existing search bounds, fallback rules may supply an anchor
+        or boundary. Temporal ordering alone does not establish gestural validity.
+        SPAN does not currently display automatic quality warnings for these cases.
+        </p>
+
         <h3>7. Landmark export</h3>
         <ul>
           <li>Use <b>Export CSV</b> to save landmark information from the current file.</li>
@@ -5140,6 +5136,7 @@ void mainWindow::showHelpDialog()
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     layout->addWidget(buttons);
 
+    UiAppearance::fitToScreen(dialog);
     dialog.exec();
 }
 

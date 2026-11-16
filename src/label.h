@@ -4,6 +4,7 @@
 #include <QMap>
 #include <QList>
 #include <QString>
+#include <QUuid>
 #include <vector>
 #include <limits>
 
@@ -30,23 +31,27 @@ class Label : public QObject
 public:
     explicit Label(QCustomPlot *plot);
 
+    enum class AnchorMode { SnapNearInput, PreserveRefinedAnchor };
+    void annotateGestureAtTime(double timeSeconds, AnchorMode mode);
+
     // External API used by mainWindow.cpp
-    void placeLabelAt(double x, QString labelName);
-    void removeLabelAt(double x, const QString &legendName);
+    void placeLabelAt(double x, QString labelName, const QUuid &id = QUuid());
+    void removeLabel(const QUuid &id);
     void removeAllLabels();
 
     void clearSelectedLine();
-    bool selectLineIfMatch(const QString &legendName, double xOffset);
+    bool selectLine(const QUuid &id);
 
     void moveHandleBy(QCPItemText *handle, double deltaX);
-    void updateLabelName(double x, const QString &actualName);
+    void updateLabelName(const QUuid &id, const QString &actualName);
     void refreshGeometryForCurrentAxes();
 
-    void setVelocityThresholdFraction(double value);
+    void setVelocityThresholdFractions(double gons, double nons, double noffs, double goffs);
     void setReopeningDeadbandFraction(double value);
 
     QCustomPlot* getPlot() const { return m_plot; }
 
+    bool isDragging() const { return m_isDragging; }
     bool isHandle(const QCPItemText* item) const;
     QCPItemLine* lineForHandle(const QCPItemText* item) const;
 
@@ -55,11 +60,12 @@ public:
 
 signals:
     // Emitted when a label is created/removed/moved or clicked
-    void landmarkAdded(const QString &channelName, double offset, const QString &labelName);
-    void landmarkRemoved(double offset);
-    void labelClicked(const QString &channelName, double offset);
+    void landmarkAdded(const QString &channelName, double offset, const QString &labelName,
+                       const QUuid &id);
+    void landmarkRemoved(const QUuid &id);
+    void labelClicked(const QString &channelName, double offset, const QUuid &id);
     void labelMoved(const QString &channelName, const QString &labelName,
-                    double newX, double oldX);
+                    double newX, double oldX, const QUuid &id);
 
 private slots:
     // Mouse interaction wiring
@@ -93,7 +99,8 @@ private:
     void findTangentialGestureLandmarksFromSpeed(landmarks &lm,
                                                  double xCenterSec,
                                                  const std::vector<double> &speedData,
-                                                 double sr);
+                                                 double sr,
+                                                 double searchRadiusSec);
     double findNearestVelocityMinimum(double xClicked,
                                       const std::vector<double> &velocityData,
                                       double sr) const;
@@ -117,6 +124,9 @@ private:
     QMap<QCPItemLine*, QString> m_labelLineLegendMap; // line -> series name (graph name)
     QMap<QCPItemLine*, QString> m_labelLineNameMap;   // line -> label name (e.g., "MaxC")
 
+    // Session identity is independent of mutable names and times.
+    QMap<QCPItemLine*, QUuid> m_labelLineIdMap;
+
     // Selection/dragging state
     QCPItemLine  *m_currentlySelectedLine{nullptr};
     QCPItemText  *m_draggedHandle{nullptr};
@@ -125,6 +135,13 @@ private:
     double        m_initialClickX{0.0};
     double        m_initialLineX{0.0};
 
-    double m_velocityThresholdFraction = 0.20;
+    double m_gonsThresholdFraction = 0.20;
+    double m_nonsThresholdFraction = 0.20;
+    double m_noffsThresholdFraction = 0.20;
+    double m_goffsThresholdFraction = 0.20;
+    // Peak qualification is independent of the four boundary thresholds.
+    static constexpr double kTangentialPeakQualificationFraction = 0.20;
+    // Legacy wide-view default, not a universally validated gestural duration.
+    static constexpr double kDtwTangentialSearchRadiusSec = 0.30;
     double m_reopeningDeadbandFraction = 0.05;
 };

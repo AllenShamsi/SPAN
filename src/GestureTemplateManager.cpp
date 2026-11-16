@@ -82,7 +82,7 @@ bool GestureTemplateManager::saveTemplateToDisk(const GestureTemplate &tpl) cons
     root["id"]         = tpl.id;
     root["sampleRate"] = tpl.sampleRate;
 
-    // We keep the original object-style "channels" map:
+    // Channels are serialized as a JSON object keyed by channel name:
     //   "channels": { "TT": { ... }, "TB": { ... } }
     QJsonObject chObj;
 
@@ -99,7 +99,7 @@ bool GestureTemplateManager::saveTemplateToDisk(const GestureTemplate &tpl) cons
 
         c["channel"]  = chanName;
 
-        // Store *all* MaxC indices for this channel ---
+        // Store all MaxC indices for this channel.
         QJsonArray idxArr;
         for (int idx : cd.idxMaxCList)
             idxArr.append(idx);
@@ -157,7 +157,7 @@ bool GestureTemplateManager::loadTemplateFromDisk(const QString &templateId,
         cd.cfgZ     = chanObj.value("cfgZ").toBool(true);
         cd.cfgParam = chanObj.value("cfgParam").toInt(0);
 
-        // Load list of anchors ---
+        // Load the anchor list.
         cd.idxMaxCList.clear();
         const QJsonArray idxArr = chanObj.value("idxMaxCList").toArray();
         for (const QJsonValue &v : idxArr)
@@ -187,7 +187,7 @@ bool GestureTemplateManager::loadTemplateFromDisk(const QString &templateId,
 
 namespace {
 
-// Same mapping you had in mainWindow.cpp
+// Match the motion-parameter encoding used by mainWindow.
 static int motionParamToInt(motionParam p)
 {
     switch (p) {
@@ -286,7 +286,7 @@ static const SensorConfig *findConfigForChannel(const spanFile &data,
     return nullptr;
 }
 
-// Extract dimension-aware scalar series for THIS config
+// Extract the scalar series for the selected dimensions and motion parameter.
 static bool extractScalarSeriesForConfig(const spanFile      &data,
                                          const SensorConfig  &cfg,
                                          QVector<double>     &out)
@@ -360,7 +360,7 @@ static bool extractScalarSeriesForConfig(const spanFile      &data,
         return true;
     }
 
-    // behavior for ordinary one-dimensional or non-gesture configs.
+    // Extract components for one-dimensional or non-gesture configurations.
     out.resize(static_cast<int>(vec.size()));
 
     for (int i = 0; i < out.size(); ++i) {
@@ -481,16 +481,18 @@ static bool dtwAlignMulti(const QVector<QVector<double>> &tpl,
 static int refineMaxCUsingVelocity(const QVector<double> &disp,
                                    int idxApprox,
                                    double sampleRate,
-                                   bool wantMax)
+                                   bool wantMax,
+                                   bool *usedFallback = nullptr)
 {
+    if (usedFallback) *usedFallback = true;
     const int N = disp.size();
 
     if (N < 5 || sampleRate <= 0.0 || idxApprox < 2 || idxApprox > N - 3)
         return idxApprox;
 
     // Search near the DTW-mapped anchor.
-    // We want the nearest displacement extremum of the SAME polarity
-    // as the template anchor, not the strongest opposite-polarity event nearby.
+    // Select the nearest displacement extremum with the template anchor's polarity.
+    // Avoid selecting a stronger opposite-polarity event.
     int halfWin = static_cast<int>(std::round(0.10 * sampleRate)); // 100 ms
 
     if (halfWin < 5)
@@ -534,8 +536,10 @@ static int refineMaxCUsingVelocity(const QVector<double> &disp,
         }
     }
 
-    if (bestIdx >= 0)
+    if (bestIdx >= 0) {
+        if (usedFallback) *usedFallback = false;
         return bestIdx;
+    }
 
     // Fallback: if smoothing/plateaus prevent a formal local extremum,
     // choose the strongest point of the requested polarity in the local window.
@@ -576,8 +580,10 @@ static int refineMaxCUsingVelocity(const QVector<double> &disp,
 
 static int refineMaxCUsingSpeedMinimum(const QVector<double> &speed,
                                        int idxApprox,
-                                       double sampleRate)
+                                       double sampleRate,
+                                       bool *usedFallback = nullptr)
 {
+    if (usedFallback) *usedFallback = true;
     const int N = speed.size();
 
     if (N < 5 || sampleRate <= 0.0 || idxApprox < 2 || idxApprox > N - 3)
@@ -620,8 +626,10 @@ static int refineMaxCUsingSpeedMinimum(const QVector<double> &speed,
         }
     }
 
-    if (bestLocalMin >= 0)
+    if (bestLocalMin >= 0) {
+        if (usedFallback) *usedFallback = false;
         return bestLocalMin;
+    }
 
     // Fallback: choose the lowest-speed sample in the local window.
     int bestIdx = idxApprox;
@@ -874,7 +882,7 @@ GestureTemplateManager::applyTemplateToSpan(const spanFile        &file,
 
         QVector<double> timesThisChannel;
 
-        // NEW: loop through all anchors for this channel
+        // Map each anchor for this channel.
         for (int jMaxC_full : cdTpl.idxMaxCList) {
             if (jMaxC_full < 0)
                 jMaxC_full = 0;
@@ -890,7 +898,7 @@ GestureTemplateManager::applyTemplateToSpan(const spanFile        &file,
 
             const int iMaxC_dec = mapTplToTokDec[jMaxC_dec];
             if (iMaxC_dec < 0)
-                continue;   // this anchor doesn’t map well, skip it
+                continue;   // Skip anchors without an alignment mapping.
 
             int iMaxC_full = iMaxC_dec * decFactor;
             if (iMaxC_full >= tokMultiFull[c].size())
@@ -900,12 +908,13 @@ GestureTemplateManager::applyTemplateToSpan(const spanFile        &file,
                 isTwoDimensionalDisplacementGestureTemplateChannel(cdTpl);
 
             int iMaxC_refined = iMaxC_full;
+            bool usedFallback = true;
 
             if (twoDimensionalGesture) {
                 // For TTxz / TDxz tangential-speed templates, MaxC corresponds to
                 // a local speed minimum, not a signed displacement peak/trough.
                 iMaxC_refined =
-                    refineMaxCUsingSpeedMinimum(tokMultiFull[c], iMaxC_full, sr);
+                    refineMaxCUsingSpeedMinimum(tokMultiFull[c], iMaxC_full, sr, &usedFallback);
             } else {
                 // For ordinary 1D displacement templates, preserve the polarity
                 // of the exemplar/template anchor.
@@ -913,11 +922,13 @@ GestureTemplateManager::applyTemplateToSpan(const spanFile        &file,
                     templateAnchorWantsMaximum(tplMultiFull[c], jMaxC_full, sr);
 
                 iMaxC_refined =
-                    refineMaxCUsingVelocity(tokMultiFull[c], iMaxC_full, sr, wantMax);
+                    refineMaxCUsingVelocity(tokMultiFull[c], iMaxC_full, sr, wantMax, &usedFallback);
             }
 
             const double tTokenMaxC = double(iMaxC_refined) / sr;
             timesThisChannel.append(tTokenMaxC);
+            auto &fallbacks = result.usedFallbackByChannel[chanName];
+            fallbacks[tTokenMaxC] = fallbacks.value(tTokenMaxC, false) || usedFallback;
             ++result.appliedChannels;
         }
 

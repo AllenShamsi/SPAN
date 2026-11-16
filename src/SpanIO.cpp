@@ -77,7 +77,7 @@ bool rewriteSpanHeader11(
     out.close();
     in.close();
 
-    // Atomically replace the original file
+    // Replace the destination; removing it before renaming is not atomic.
     std::error_code ec;
     std::filesystem::remove(path, ec);
     std::filesystem::rename(tmp, path, ec);
@@ -121,6 +121,8 @@ bool readSpanFile(const std::string &path, spanFile &data)
         return false;
 
     data.path = path;
+    data.channelQuantities.clear();
+    bool ag50xCoordinates = false;
 
     std::string line;
     int numWavSamples = 0;
@@ -136,7 +138,10 @@ bool readSpanFile(const std::string &path, spanFile &data)
 
         stripCR(line);
 
-        if (i == 2) {
+        if (i == 0) {
+            // SPAN preprocessing preserves the AG50x source signature and mm units.
+            ag50xCoordinates = line == "AG50xDATA_V002" || line == "AG50xDATA_V003";
+        } else if (i == 2) {
             if (!parseIntAfterColon(line, data.numChannels))
                 return false;
         } else if (i == 3) {
@@ -244,6 +249,8 @@ bool readSpanFile(const std::string &path, spanFile &data)
     // ---- position channels (numChannels - 1) ----
     data.channelsData.resize(data.numChannels - 1);
     for (int j = 0; j < data.numChannels - 1; ++j) {
+        data.channelQuantities[j + 1] = ag50xCoordinates
+            ? ChannelQuantity::ag50xPosition() : ChannelQuantity{};
         auto &ch = data.channelsData[static_cast<std::size_t>(j)];
         ch.resize(numPosSamples);
 
@@ -297,6 +304,8 @@ bool readSpanFile(const std::string &path, spanFile &data)
 
         data.channelsData.push_back(derivedSignal);
         const int newChannelIndex = static_cast<int>(data.channelsData.size());
+        data.channelQuantities[newChannelIndex] = derivedChannelQuantity(
+            data.channelQuantity(signal1), data.channelQuantity(signal2), option);
         data.sensors[newChannelIndex] = derivedName;
     }
 

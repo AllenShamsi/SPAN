@@ -4,6 +4,7 @@
 #include <QStyleFactory>
 #include "mainWindow.h"
 #include <QStyleHints>
+#include "UiAppearance.h"
 
 class NoTransientScrollBarsStyle : public QProxyStyle {
 public:
@@ -16,18 +17,19 @@ public:
                   QStyleHintReturn *ret = nullptr) const override
     {
         if (hint == QStyle::SH_ScrollBar_Transient)
-            return 0; // never auto-hide on mac
+            return 0; // Keep macOS scrollbars visible.
         return QProxyStyle::styleHint(hint, opt, w, ret);
     }
 };
 
 int main(int argc, char *argv[])
 {
+    QGuiApplication::setHighDpiScaleFactorRoundingPolicy(Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
     QApplication app(argc, argv);
+    UiAppearance::apply(app);
+    QCoreApplication::setApplicationName(QStringLiteral("SPAN"));
+    QCoreApplication::setApplicationVersion(QStringLiteral(SPAN_VERSION));
 
-#ifdef Q_OS_WIN
-    app.styleHints()->setColorScheme(Qt::ColorScheme::Light);
-#endif
 
 #ifdef Q_OS_MAC
     QStyle *fusion = QStyleFactory::create("Fusion");
@@ -35,6 +37,7 @@ int main(int argc, char *argv[])
 #endif
 
     mainWindow w;
+    UiAppearance::fitToScreen(w);
     w.show();
     return app.exec();
 }

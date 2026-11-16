@@ -328,7 +328,7 @@ std::vector<channel> applyOcclusalCorrection(const OcclusalCorrectionModel& mode
             corrected[ch].samples[frame].y = correctedP(1);
             corrected[ch].samples[frame].z = correctedP(2);
 
-            // Intentionally unchanged for now
+            // Preserve source orientation angles; correction applies only to XYZ.
             corrected[ch].samples[frame].phi = s.phi;
             corrected[ch].samples[frame].theta = s.theta;
         }

@@ -23,13 +23,13 @@ public:
     ~Sensor3DVisualizer() override;
 
     // Build the 3D scatter in the given layout.
-    // minSize is optional; if invalid -> it will just expand with the layout.
+    // An invalid minSize leaves sizing to the parent layout.
     void setupScatterPlot(QVBoxLayout *hl3D,
                           QWidget *plotTitleFrame,
                           QWidget *plotLegendWidget,
                           const QSize &minSize = QSize());
 
-    // Optional: set per-sensor colors if you ever use this externally
+    // Override individual sensor colors.
     void setSensorColors(const QMap<int, QColor> &colors);
 
     void setGraphTitle(const QString &title);

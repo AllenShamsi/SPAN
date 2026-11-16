@@ -35,7 +35,7 @@ void Sensor3DVisualizer::initializeGraph()
 
     scatterPlot->setShadowQuality(QAbstract3DGraph::ShadowQualityNone);
 
-    // Axis titles (your code)
+    // Axis titles
     scatterPlot->axisX()->setTitle("X Axis");
     scatterPlot->axisY()->setTitle("Z Axis");
     scatterPlot->axisZ()->setTitle("Y Axis");
@@ -50,7 +50,7 @@ void Sensor3DVisualizer::initializeGraph()
     auto *zAxis = scatterPlot->axisZ();
 
     // Major ticks / grid lines
-    xAxis->setSegmentCount(2);   // 4–7 depending on your range
+    xAxis->setSegmentCount(2);
     yAxis->setSegmentCount(2);
     zAxis->setSegmentCount(2);
 
@@ -59,7 +59,7 @@ void Sensor3DVisualizer::initializeGraph()
     yAxis->setLabelFormat(QStringLiteral("%.0f"));
     zAxis->setLabelFormat(QStringLiteral("%.0f"));
 
-    // Keep your fixed Y range helper
+    // Apply the fixed Y-axis range.
     setYaxisBoundaries(-100, 100);
 
     auto *camera = scatterPlot->scene()->activeCamera();
@@ -72,7 +72,7 @@ void Sensor3DVisualizer::initializeGraph()
     camera->setMaxZoomLevel(250.0f);  // cannot zoom further in than this
     camera->setZoomLevel(120.0f);     // starting zoom
 
-    // Optional: prevent camera from flipping upside down
+    // Prevent the camera from flipping upside down.
     camera->setWrapYRotation(false);
     camera->setWrapXRotation(false);
 
@@ -126,12 +126,12 @@ void Sensor3DVisualizer::updateData(const std::vector<channel>& data)
         }
 
         // --- Point look ---
-        series->setMesh(QAbstract3DSeries::MeshSphere);   // MeshCube, MeshPyramid, MeshMinimal, ...
+        series->setMesh(QAbstract3DSeries::MeshSphere);
         series->setItemSize(0.15f);
 
-        // Optional: labels when hovered/selected
+        // Configure point-label text; item labels remain hidden by default.
         series->setItemLabelFormat(QStringLiteral("@seriesName\nx: @xLabel\ny: @zLabel\nz: @yLabel"));
-        series->setItemLabelVisible(false);  // set true if you want labels always on
+        series->setItemLabelVisible(false);
 
         scatterPlot->addSeries(series);
     }
@@ -147,7 +147,6 @@ void Sensor3DVisualizer::createLegend(const std::vector<channel>& data)
         delete child;
     }
 
-    // Set the vertical spacing to 0
     legendLayout->setSpacing(2);
 
     // Create legend items
@@ -159,14 +158,13 @@ void Sensor3DVisualizer::createLegend(const std::vector<channel>& data)
 
             QLabel *textLabel = new QLabel(ch.sensorName);
             QFont font = textLabel->font();
-            font.setPointSize(9); // Set font size to 14
+            font.setPointSize(9);
             textLabel->setFont(font);
 
             QHBoxLayout *legendItemLayout = new QHBoxLayout;
             legendItemLayout->addWidget(colorLabel);
             legendItemLayout->addWidget(textLabel);
 
-            // Set the spacing between legend elements
             legendItemLayout->setSpacing(2);
 
             QWidget *legendItemWidget = new QWidget;
@@ -190,9 +188,7 @@ void Sensor3DVisualizer::setupScatterPlot(QVBoxLayout *hl3D,
     // --- 1) 3D scatter container ---
     QWidget *container = QWidget::createWindowContainer(scatterPlot);
 
-    // Use layout-driven sizing:
-    // - Expanding policy so it grows with its parent layout
-    // - Optional minimum size so it’s not tiny
+    // Size the container through its parent layout.
     if (minSize.isValid()) {
         container->setMinimumSize(minSize);
     }
