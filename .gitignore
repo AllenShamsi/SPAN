@@ -94,6 +94,28 @@ Desktop.ini
 *.TextGrid
 *.eaf
 
+# Authorized public tutorial recordings; exceptions apply only to these files.
+!/tutorials/dtw-multichannel/data/A_#GMA_01.span
+!/tutorials/dtw-multichannel/data/A_#GMA_02.span
+!/tutorials/dtw-multichannel/data/A_#GMA_03.span
+!/tutorials/dtw-multichannel/data/A_#GMA_04.span
+!/tutorials/dtw-multichannel/data/A_#GMA_05.span
+!/tutorials/dtw-multichannel/data/A_#GMA_06.span
+!/tutorials/dtw-multichannel/data/A_#GMA_07.span
+!/tutorials/dtw-multichannel/data/A_#GMA_08.span
+!/tutorials/dtw-multichannel/data/A_#GMA_09.span
+!/tutorials/dtw-multichannel/data/A_#GMA_10.span
+!/tutorials/dtw-multichannel/data/B_#GMA_01.span
+!/tutorials/dtw-multichannel/data/B_#GMA_02.span
+!/tutorials/dtw-multichannel/data/B_#GMA_03.span
+!/tutorials/dtw-multichannel/data/B_#GMA_04.span
+!/tutorials/dtw-multichannel/data/B_#GMA_05.span
+!/tutorials/dtw-multichannel/data/B_#GMA_06.span
+!/tutorials/dtw-multichannel/data/B_#GMA_07.span
+!/tutorials/dtw-multichannel/data/B_#GMA_08.span
+!/tutorials/dtw-multichannel/data/B_#GMA_09.span
+!/tutorials/dtw-multichannel/data/B_#GMA_10.span
+
 # Local credentials; reviewed example environment files may be committed
 .env
 .env.*

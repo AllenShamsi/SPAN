@@ -245,6 +245,12 @@ SPAN generates:
 
 ---
 
+## Tutorials
+
+- [DTW-Assisted Multi-Gesture and Multi-Channel Annotation](tutorials/dtw-multichannel/README.md) — A step-by-step guide demonstrating template creation, batch annotation, and cross-speaker application using 20 example EMA recordings.
+
+---
+
 ## Help
 
 Help is available through the **Help** menu, `F1`, and widget tooltips.
